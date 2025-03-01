@@ -1,4 +1,4 @@
-from collections.abc import Callable, Sequence, Iterable
+from collections.abc import Callable, Sequence, Set, Iterable
 from typing import Self, overload
 from numbers import Integral
 from abc import ABCMeta, abstractmethod
@@ -264,6 +264,9 @@ class PitchLike(metaclass=ABCMeta):
         """
         raise NotImplementedError
 
+    def alter(self, acci: float = 0) -> Self:
+        return self.withAcci(self.acci + acci)
+
     def isEnharmonic(self, other: Self) -> bool:
         return self.tone == other.tone
 
@@ -389,6 +392,8 @@ class OPitch(PitchLike):
         return self.__class__(deg, acci)
 
     def __neg__(self) -> Self:
+        if self.deg == 0:
+            return self.__class__(0, -self.acci)
         deg = 7 - self.deg
         tone = 12 - self.tone
         acci = tone - _majorScale[deg]
@@ -492,7 +497,7 @@ class Pitch(PitchLike):
         return hash((self.opitch, self.octave))
 
 
-class Scale(Sequence[OPitch]):
+class Scale(Sequence[OPitch], Set[OPitch]):
     """
     A scale is a sequence of unique octave intervals in ascending order, starting from
     perfect unison.
@@ -551,10 +556,50 @@ class Scale(Sequence[OPitch]):
         """
         return np.diff(self._pitches, append=OPitch())
 
+    def alter(self, idx: int | Iterable[int], acci: float | Iterable[float]) -> Self:
+        newPitches = self._pitches.copy()
+        if isinstance(idx, Iterable):  # multiple index
+            if isinstance(acci, Iterable):  # multiple accidentals
+                for i, a in zip(idx, acci):
+                    newPitches[i] = newPitches[i].alter(a)
+            else:  # single accidental
+                for i in idx:
+                    newPitches[i] = newPitches[i].alter(acci)
+        else:  # single index, single accidental
+            newPitches[idx] = newPitches[idx].alter(acci)
+        return self.__class__(newPitches)
+
+    def __contains__(self, value):
+        if not isinstance(value, PitchLike):
+            return False
+        idx = bisect_left(self._pitches, value)
+        if idx >= len(self._pitches):
+            return False
+        return self._pitches[idx] == value
+
+    def __eq__(self, other):
+        if not isinstance(other, Scale):
+            return False
+        return self._pitches.shape == other._pitches.shape and np.all(
+            self._pitches == other._pitches
+        )
+
+    def __or__(self, other: Self):
+        return self.__class__(it.chain(self._pitches, other._pitches))
+
+    def combine(self, other: Self, offset: OPitch = OPitch()) -> Self:
+        return self.__class__(it.chain(self._pitches, other._pitches + offset))
+
+    def selfCombine(self, offset: OPitch = OPitch()) -> Self:
+        return self.combine(self, offset)
+
+    def __neg__(self) -> Self:
+        newPitches = -self._pitches
+        newPitches[1:] = newPitches[1:][::-1]
+        return self._newFromTrustedArray(newPitches)
+
     def __repr__(self) -> str:
-        return f"{self.__class__.__name__}({
-            ", ".join ( repr ( p ) for p in self._pitches )
-        })"
+        return f"{self.__class__.__name__}({", ".join(repr(p) for p in self._pitches)})"
 
     def __hash__(self) -> int:
         return hash(tuple(self._pitches))
@@ -563,19 +608,28 @@ class Scale(Sequence[OPitch]):
 class Scales:
     """Common scales in western music."""
 
-    MAJOR = IONIAN = Scale(range(7))
+    MAJOR = IONIAN = Scale(range(1, 7))
+    HARMONIC_MAJOR = MAJOR.alter(5, -1)
     DORIAN = MAJOR.roll(-1)
     PHRYGIAN = MAJOR.roll(-2)
     LYDIAN = MAJOR.roll(-3)
     MIXOLYDIAN = MAJOR.roll(-4)
     MINOR = AOLIAN = MAJOR.roll(-5)
+    HARMONIC_MINOR = MINOR.alter(6, 1)
+    MELODIC_MINOR = HARMONIC_MINOR.alter(5, 1)
     LOCRIAN = MAJOR.roll(-6)
-    MAJOR_PENTATONIC = CHINESE_GONG = Scale(0, 1, 2, 4, 5)
-    CHINESE_SHANG = MAJOR_PENTATONIC.roll(-1)
-    CHINESE_JUE = MAJOR_PENTATONIC.roll(-2)
-    CHINESE_ZHI = MAJOR_PENTATONIC.roll(-3)
-    MINOR_PENTATONIC = CHINESE_YU = MAJOR_PENTATONIC.roll(-4)
+    MAJOR_PENTATONIC = CN_GONG = Scale(1, 2, 4, 5)
+    CN_SHANG = MAJOR_PENTATONIC.roll(-1)
+    CHNJUE = MAJOR_PENTATONIC.roll(-2)
+    CN_ZHI = MAJOR_PENTATONIC.roll(-3)
+    MINOR_PENTATONIC = CN_YU = MAJOR_PENTATONIC.roll(-4)
+    WHOLE_TONE = WHOLE_TONE_SHARP = Scale(
+        1, 2, OPitch(3, 1), OPitch(4, 1), OPitch(5, 1)
+    )
+    WHOLE_TONE_FLAT = Scale(1, 2, OPitch(4, -1), OPitch(5, -1), OPitch(6, -1))
+    BLUES = Scale(OPitch(2, -1), 3, OPitch(3, 1), 4, OPitch(6, -1))
 
 
 OInterval = OPitch
 Interval = Pitch
+OIntervalSet = OPitchSet = Scale
