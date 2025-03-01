@@ -12,6 +12,7 @@ from sortedcontainers import SortedSet
 from .utils.bisect_utils import bisect_round, RoundingMode
 
 __all__ = [
+    "AcciPref",
     "Accis",
     "Degs",
     "Intervals",
@@ -22,6 +23,10 @@ __all__ = [
     "OPitch",
     "Pitch",
     "Scale",
+    "OInterval",
+    "Interval",
+    "OIntervalSet",
+    "OPitchSet",
 ]
 
 
@@ -309,7 +314,7 @@ class OPitch(PitchLike):
         cls,
         tone: float,
         acciPref: AcciPref = AcciPrefs.CLOSEST_FLAT_F_SHARP,
-    ) -> Self:
+    ) -> Self:  # TODO: fix problem of microtone above B or below C
         tone %= 12
         deg = acciPref(tone)
         acci = tone - _majorScale[deg]
@@ -422,7 +427,26 @@ class Pitch(PitchLike):
     Represents a pitch with specific octave, or an interval that may cross multiple octaves.
     """
 
-    def __new__(cls, opitch: OPitch = OPitch(), octave: int = 0) -> Self:
+    @overload
+    def __new__(cls, deg: int = 0, acci: float = 0) -> Self: ...
+
+    @overload
+    def __new__(cls, opitch: PitchLike = OPitch(), octave: int = 0) -> Self: ...
+
+    def __new__(cls, arg1: int | PitchLike, arg2: float | int) -> Self:
+        if isinstance(arg1, Pitch):
+            arg1 = arg1.opitch
+        if isinstance(arg1, OPitch):
+            opitch = arg1
+            octave = arg2
+        else:
+            octave, odeg = divmod(arg1, 7)
+            opitch = OPitch(odeg, arg2)
+        return cls._new_helper(opitch, octave)
+
+    @classmethod
+    @lru_cache
+    def _new_helper(cls, opitch: OPitch, octave: int) -> Self:
         self = super().__new__(cls)
         self._opitch = opitch
         self._octave = octave
@@ -474,7 +498,9 @@ class Pitch(PitchLike):
         return OPitch(odeg, acci).atOctave(octave)
 
     def __neg__(self) -> Self:
-        return (-self.opitch).atOctave(-self.octave + 1)
+        if self.opitch.deg == 0:
+            return (-self.opitch).atOctave(-self.octave)
+        return (-self.opitch).atOctave(-self.octave - 1)
 
     def __mul__(self, other: int) -> Self:
         if other == 0:
