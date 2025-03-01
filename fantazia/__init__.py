@@ -1,11 +1,13 @@
-from collections.abc import Callable
-from typing import Self
+from collections.abc import Callable, Sequence, Iterable
+from typing import Self, overload
 from numbers import Integral
 from abc import ABCMeta, abstractmethod
 from dataclasses import dataclass
 from bisect import bisect_left, bisect_right
+import itertools as it
 
 import numpy as np
+from sortedcontainers import SortedSet
 
 from .utils.bisect_utils import bisect_round, RoundingMode
 
@@ -187,6 +189,13 @@ class PitchLike ( metaclass = ABCMeta ):
         return np.pow ( 2, self.tone / 12 )
     
     @abstractmethod
+    def withAcci ( self, acci: float = 0 ) -> Self:
+        """
+        Returns a new instance of the same class with the given accidental.
+        """
+        raise NotImplementedError
+    
+    @abstractmethod
     def __add__ ( self, other: Self ) -> Self:
         raise NotImplementedError
     
@@ -275,6 +284,9 @@ class OPitch ( PitchLike ):
     def atOctave ( self, octave: int = 0 ) -> "Pitch":
         return Pitch ( self, octave )
     
+    def withAcci ( self, acci: float = 0 ) -> Self:
+        return self.__class__ ( self.deg, acci )
+    
     def isEnharmonic ( self, other: Self ) -> bool:
         return ( self.tone - other.tone ) % 12 == 0
     
@@ -340,6 +352,9 @@ class Pitch ( PitchLike ):
     def isEnharmonic ( self, other: PitchLike ) -> bool:
         return self.tone == other.tone
     
+    def withAcci ( self, acci: float = 0 ) -> Self:
+        return self.opitch.withAcci ( acci ).atOctave ( self.octave )
+    
     def hz ( self, A0: float = 440 ) -> float:
         return A0 * np.power ( 2, ( self.tone - 9 ) / 12 )
     
@@ -356,12 +371,65 @@ class Pitch ( PitchLike ):
     def __mul__ ( self, other: int ) -> Self:
         if other == 0: return self.__class__ ( )
         if not isinstance ( other, Integral ):
-            raise TypeError ( f"can only multiply by integers, got {type ( other )}" )
+            raise TypeError ( f"can only multiply by integers, got {other.__class__.__name__}" )
         deg = self.deg * other
         tone = self.tone * other
         octave, odeg = divmod ( deg, 7 )
         acci = tone - _majorScale [ odeg ] - octave * 12 + self.acci
         return OPitch ( odeg, acci ).atOctave ( octave )
+
+class Scale ( Sequence [ OPitch ] ):
+    """
+    A scale is a sequence of octave intervals in ascending order, starting from perfect unison.
+    """
+    
+    __slots__ = ( "_pitches", )
+    
+    @classmethod
+    def _newFromTrustedArray ( cls, pitches: np.ndarray ) -> Self:
+        self = super ( ).__new__ ( cls )
+        self._pitches = pitches
+        self._pitches.flags.writeable = False
+        return self
+    
+    @overload
+    def __new__ ( cls, pitches: Iterable [ OPitch ] ) -> Self:...
+    
+    @overload
+    def __new__ ( cls, *pitches: OPitch ) -> Self: ...
+    
+    def __new__ ( cls, *args ) -> Self:
+        if len ( args ) == 1 and isinstance ( args [ 0 ], Iterable ):
+            pitches = args [ 0 ]
+        else: pitches = args
+        return cls._newFromTrustedArray ( np.array (
+            SortedSet ( it.chain ( ( OPitch ( ), ), pitches ) ),
+            dtype = object,
+        ) )
+    
+    def __getitem__ ( self, key: int | slice | Sequence [ int ] ) -> OPitch | Sequence [ OPitch ]:
+        if isinstance ( key, tuple ): key = list ( key )
+        return self._pitches [ key ]
+    
+    def __len__ ( self ):
+        return len ( self._pitches )
+    
+    def __iter__ ( self ):
+        return iter ( self._pitches )
+    
+    def roll ( self, n: int ) -> Self:
+        newPitches = np.roll ( self._pitches, n )
+        newPitches -= newPitches [ 0 ]
+        return self._newFromTrustedArray ( newPitches )
+    
+    def __repr__ ( self ) -> str:
+        return f"{self.__class__.__name__}({
+            ", ".join ( repr ( p ) for p in self._pitches )
+        })"
+
+class Scales:
+    MAJOR = Scale ( OPitch ( i ) for i in range ( 7 ) )
+    MINOR = MAJOR.roll ( 2 )
 
 OInterval = OPitch
 Interval = Pitch
