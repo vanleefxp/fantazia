@@ -452,7 +452,7 @@ class OPitch(PitchLike):
         deg = self.deg * other
         tone = self.tone * other
         octave, deg = divmod(deg, 7)
-        acci = tone - _majorScale[deg] - octave * 12 + self.acci
+        acci = tone - _majorScale[deg] - octave * 12
         return self.__class__(deg, acci)
 
     def __str__(self) -> str:
@@ -644,12 +644,11 @@ class Mode(Sequence[OPitch], Set[OPitch]):
 
     def __getitem__(self, key: int | slice | Iterable[int]) -> OPitch | Self:
         if isinstance(key, slice):  # generate a new scale by slicing
-            start, stop, step = key.indices(len(self))
+            start, _, step = key.indices(len(self))
             newPitches = self._pitches[key].copy()
             if len(newPitches) == 0:
                 raise IndexError("empty slice cannot make a scale")
             if step < 0:
-                print(newPitches)
                 newPitches = np.roll(newPitches, 1)
                 newPitches -= newPitches[0]
                 newPitches[1:] *= -1
@@ -815,17 +814,17 @@ class _ModeCyclicAccessor:
                 return Mode()
             negStep = key.step is not None and key.step < 0
             if negStep:
-                roll = -key.start - 1 if key.stop is not None else -1
+                roll = -key.start - 1 if key.start is not None else -1
                 key = slice(-1, key.stop, key.step)
             else:
                 roll = -key.start if key.start is not None else 0
                 key = slice(0, key.stop, key.step)
-            newPitches = np.roll(self._parent._pitches, roll)[key]
+            newPitches = np.roll(self._parent._pitches, roll)[key].copy()
             if len(newPitches) == 0:
                 raise IndexError("empty slice cannot make a scale")
             newPitches -= newPitches[0]
             if negStep:
-                newPitches[1:] *= -1
+                newPitches[1:] = -newPitches[1:]
             return Mode._newFromTrustedArray(newPitches)
         elif isinstance(key, Iterable):
             key = np.array(list(set(key)))
