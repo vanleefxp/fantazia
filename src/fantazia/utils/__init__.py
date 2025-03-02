@@ -1,6 +1,10 @@
+from collections.abc import Iterable
 from typing import Sequence, TypeVar, Callable
 from bisect import bisect_left
 from enum import StrEnum
+
+import numpy as np
+from sklearn.cluster import DBSCAN
 
 __all__ = ["bisect_round", "bsearch", "RoundingMode"]
 
@@ -66,3 +70,30 @@ def bsearch(
         return idx
     else:
         return -idx - 1
+
+
+def _clusterCenters(data: np.ndarray, labels):
+    nClusters = np.max(labels) + 1
+    centers = np.empty(nClusters, dtype=float)
+    for i in range(nClusters):
+        cluster = data[labels == i]
+        centers[i] = np.mean(cluster)
+    return centers
+
+
+def approxGCD(data: Iterable[float], tolerance: float) -> float:
+    """
+    find a value `k` such that all data elements are approximately multiples of `k`
+    """
+    dbscan = DBSCAN(eps=tolerance, min_samples=1)
+    data = np.array(data, dtype=float)
+    while len(data) > 1:
+        # remove elements close to zero
+        # otherwise the algorithm might never terminate
+        data = data[abs(data) > tolerance]
+        data.sort()
+        data = data - np.insert(data, 0, 0)[:-1]
+        clusterResult = dbscan.fit(data.reshape(-1, 1))
+        labels = clusterResult.labels_
+        data = _clusterCenters(data, labels)
+    return data[0]

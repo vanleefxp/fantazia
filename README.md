@@ -5,7 +5,7 @@
 
 `fantazia` is a lightweight library for math-based music theory computation. The package is currently under development and not yet distributed to PyPI. Currently only pitch and interval computation is supported. The package name comes from "fantasia" and the preferred abbreviation is `fz`.
 
-Different from sophisticated and feature-rich [`music21`](https://github.com/cuthbertLab/music21) library which provides a comprehensive music analysis toolkit, the target of `fantazia` is to regularize music computations by mathematic rules. The music related types in `fantazia` do not contain more information than necessary as an abstraction. Support for conversions to `music21` types is planned in the future.
+Different from sophisticated and feature-rich [`music21`](https://github.com/cuthbertLab/music21) library which provides a comprehensive music analysis toolkit, the target of `fantazia` is to regularize music computations by mathematic rules. The music related types in `fantazia` do not contain more information than necessary as a mathematic abstraction, and are immutable. Support for conversion to `music21` types is planned in the future.
 
 ## Pitch and Interval
 

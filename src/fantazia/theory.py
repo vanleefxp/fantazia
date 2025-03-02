@@ -9,7 +9,7 @@ from functools import lru_cache
 import numpy as np
 from sortedcontainers import SortedSet
 
-from .utils.bisect_utils import bisect_round, RoundingMode
+from .utils import bisect_round, RoundingMode
 
 __all__ = [
     "AcciPref",
@@ -18,15 +18,14 @@ __all__ = [
     "Intervals",
     "Qualities",
     "AcciPrefs",
-    "Scales",
+    "Modes",
     "PitchLike",
     "OPitch",
     "Pitch",
-    "Scale",
+    "Mode",
     "OInterval",
     "Interval",
     "OIntervalSet",
-    "OPitchSet",
 ]
 
 
@@ -151,7 +150,7 @@ class AcciPrefs:
     Examples:
     
     | input `tone` | output `degree` | preferred name
-    |-:|-:|:-|
+    |:-:|:-:|:-|
     | `1` | `0` | C sharp |
     | `3` | `1` | D sharp |
     | `5.5` | `3` | F quarter-tone-sharp |
@@ -169,7 +168,7 @@ class AcciPrefs:
     Examples:
     
     | input `tone` | output `degree` | preferred name
-    |-:|-:|:-|
+    |:-:|:-:|:-|
     | `1` | `1` | D flat |
     | `3` | `2` | E flat |
     | `5.5` | `4` | G 3-quarter-tones-flat |
@@ -557,7 +556,13 @@ def _scaleAlter(
     return pitches
 
 
-class Scale(Sequence[OPitch], Set[OPitch]):
+def _scaleInvert(pitches: np.ndarray[OPitch]) -> np.ndarray[OPitch]:
+    pitches = -pitches
+    pitches[1:] = pitches[1:][::-1]
+    return pitches
+
+
+class Mode(Sequence[OPitch], Set[OPitch]):
     """
     A scale is a sequence of unique octave intervals in ascending order, starting from
     perfect unison.
@@ -591,12 +596,37 @@ class Scale(Sequence[OPitch], Set[OPitch]):
             )
         )
 
-    def __getitem__(
-        self, key: int | slice | Sequence[int]
-    ) -> OPitch | Sequence[OPitch]:
-        if isinstance(key, tuple):
-            key = list(key)
-        return self._pitches[key]
+    @overload
+    def __getitem__(self, key: int) -> OPitch: ...
+
+    @overload
+    def __getitem__(self, key: slice | Iterable[int]) -> Self:
+        """
+        Extract a new scale from part of the current scale.
+        """
+        ...
+
+    def __getitem__(self, key: int | slice | Iterable[int]) -> OPitch | Self:
+        if isinstance(key, slice):  # generate a new scale by slicing
+            start, _, step = key.indices(len(self))
+            newPitches = self._pitches[key].copy()
+            if len(newPitches) == 0:
+                raise IndexError("empty slice cannot make a scale")
+            if start > 0:  # not starting from first note
+                newPitches -= newPitches[0]
+            if step < 0:  # inverted
+                newPitches = _scaleInvert(newPitches)
+            return self._newFromTrustedArray(newPitches)
+        elif isinstance(key, Iterable):  # generate a new scale by a set of indices
+            indices = SortedSet(key)
+            if len(indices) == 0:
+                raise IndexError("empty set cannot make a scale")
+            newPitches = self._pitches[list(indices)].copy()
+            if indices[0] > 0:
+                newPitches -= newPitches[0]
+            return self._newFromTrustedArray(newPitches)
+        else:  # get a pitch by index
+            return self._pitches[key]
 
     def __len__(self):
         return len(self._pitches)
@@ -655,7 +685,7 @@ class Scale(Sequence[OPitch], Set[OPitch]):
                 _scaleAlter(newPitches, arg1, arg2)
         return self.__class__(newPitches)
 
-    def __contains__(self, value):
+    def __contains__(self, value) -> bool:
         # a scale is an ordered sequence
         # so use binary search
         if not isinstance(value, PitchLike):
@@ -665,14 +695,18 @@ class Scale(Sequence[OPitch], Set[OPitch]):
             return False
         return self._pitches[idx] == value
 
-    def __eq__(self, other):
-        if not isinstance(other, Scale):
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, Mode):
             return False
         return self._pitches.shape == other._pitches.shape and np.all(
             self._pitches == other._pitches
         )
 
-    def __or__(self, other: Self):
+    def __and__(self, other: Self) -> Self:
+        newPitches = np.intersect1d(self._pitches, other._pitches)
+        return self._newFromTrustedArray(newPitches)
+
+    def __or__(self, other: Self) -> Self:
         return self.__class__(it.chain(self._pitches[1:], other._pitches[1:]))
 
     def combine(self, other: Self, offset: OPitch = OPitch()) -> Self:
@@ -690,8 +724,7 @@ class Scale(Sequence[OPitch], Set[OPitch]):
         return self.combine(self, offset)
 
     def __neg__(self) -> Self:
-        newPitches = -self._pitches
-        newPitches[1:] = newPitches[1:][::-1]
+        newPitches = _scaleInvert(self._pitches)
         return self._newFromTrustedArray(newPitches)
 
     def __repr__(self) -> str:
@@ -701,10 +734,10 @@ class Scale(Sequence[OPitch], Set[OPitch]):
         return hash(tuple(self._pitches))
 
 
-class Scales:
+class Modes:
     """Common scales in western music."""
 
-    MAJOR = IONIAN = Scale(range(1, 7))
+    MAJOR = IONIAN = Mode(range(1, 7))
     HARMONIC_MAJOR = MAJOR.alter(5, -1)
     DORIAN = MAJOR.roll(-1)
     PHRYGIAN = MAJOR.roll(-2)
@@ -714,18 +747,16 @@ class Scales:
     HARMONIC_MINOR = MINOR.alter(6, 1)
     MELODIC_MINOR = HARMONIC_MINOR.alter(5, 1)
     LOCRIAN = MAJOR.roll(-6)
-    MAJOR_PENTATONIC = CN_GONG = Scale(1, 2, 4, 5)
+    MAJOR_PENTATONIC = CN_GONG = Mode(1, 2, 4, 5)
     CN_SHANG = MAJOR_PENTATONIC.roll(-1)
     CHNJUE = MAJOR_PENTATONIC.roll(-2)
     CN_ZHI = MAJOR_PENTATONIC.roll(-3)
     MINOR_PENTATONIC = CN_YU = MAJOR_PENTATONIC.roll(-4)
-    WHOLE_TONE = WHOLE_TONE_SHARP = Scale(
-        1, 2, OPitch(3, 1), OPitch(4, 1), OPitch(5, 1)
-    )
-    WHOLE_TONE_FLAT = Scale(1, 2, OPitch(4, -1), OPitch(5, -1), OPitch(6, -1))
-    BLUES = Scale(OPitch(2, -1), 3, OPitch(3, 1), 4, OPitch(6, -1))
+    WHOLE_TONE = WHOLE_TONE_SHARP = Mode(1, 2, OPitch(3, 1), OPitch(4, 1), OPitch(5, 1))
+    WHOLE_TONE_FLAT = Mode(1, 2, OPitch(4, -1), OPitch(5, -1), OPitch(6, -1))
+    BLUES = Mode(OPitch(2, -1), 3, OPitch(3, 1), 4, OPitch(6, -1))
 
 
 OInterval = OPitch
 Interval = Pitch
-OIntervalSet = OPitchSet = Scale
+OIntervalSet = Mode
