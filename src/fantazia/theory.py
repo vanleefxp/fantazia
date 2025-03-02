@@ -334,10 +334,14 @@ class OPitch(PitchLike):
     """
 
     @classmethod
-    def fromDegAndTone(cls, deg: int, tone: float) -> Self:
+    def fromDegAndTone(cls, deg: int | str, tone: float) -> Self:
         """
         Creates a pitch from a degree and a chromatic tone.
         """
+        if isinstance(deg, str):
+            deg = ord(deg.upper()) - 67
+        if not isinstance(deg, Integral):
+            raise TypeError(f"degree must be an integer, got {deg.__class__.__name__}")
         octave, deg = divmod(deg, 7)
         acci = tone - _majorScale[deg] - octave * 12
         return cls(deg, acci)

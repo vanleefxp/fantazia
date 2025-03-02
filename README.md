@@ -25,11 +25,7 @@ p1 = fz.OPitch(fz.Degs.C) # C
 p2 = fz.OPitch("A") # A
 p3 = fz.OPitch(fz.Degs.B, fz.Accis.FLAT) # B flat
 
-print(p1, p2, p3)
-print(p3.deg, p3.acci)
-# Output: 
-# OPitch(C+0.00) OPitch(A+0.00) OPitch(B-1.00)
-# 6 -1
+print(p1, p2, p3, p3.deg, p3.acci) # Output: C A B- 6 -1
 ```
 
 The `OPitch` object has another property called `tone`, which describes the pitch's chromatic position in an octave. The octave space is mapped to [0, 12) range, and notes C, D, E, F, G, A, B without accidental have tone values of 0, 2, 4, 5, 7, 9, 11, respectively. The tone value is computed by summing the tone value of base note and the numeric representation of accidental. (i.e. `p.tone = (0, 2, 4, 5, 7, 9, 11)[p.deg] + p.acci`)
@@ -37,6 +33,17 @@ The `OPitch` object has another property called `tone`, which describes the pitc
 ```python
 print(p1.tone, p2.tone, p3.tone)
 # Output: 0 9 10
+```
+
+`OPitch` objects can also be created by specifying a degree and tone value, or just a tone value. When using just a tone value, an accidental will be chosen automatically according to the `acciPref` argument.
+
+```python
+import fantazia as fz
+
+p4 = fz.OPitch.fromDegAndTone("E", 3) # E flat
+p5 = fz.fromDeg(6) # F sharp
+
+print(p4, p5) # Output: E- F+
 ```
 
 ### Pitch / Interval Calculations
@@ -60,8 +67,7 @@ p1 = fz.OPitch(2) # E or M3
 p2 = fz.OPitch(2, -1) # E flat or m3
 print(p1 + p2, p1 - p2, p1 * 2, -p1)
 
-# Output:
-# OPitch(G+0.00) OPitch(C+1.00) OPitch(G+1.00) OPitch(A-1.00)
+# Output: G C+ G+ A-
 
 # Explanation:
 # M3 + m3 = P5, M3 - m3 = A1, M3 * 2 = A5, -M3 = m6
