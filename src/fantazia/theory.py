@@ -110,13 +110,6 @@ rules can be found in `AcciPrefs`.
 """
 
 
-def _makeClosestAcciPref(roundingMode: RoundingMode) -> AcciPref:
-    def _pref(tone: float) -> int:
-        return bisect_round(_majorScale, tone, roundingMode=roundingMode)
-
-    return _pref
-
-
 def _alwaysSharp(tone: float) -> int:
     return bisect_right(_majorScale, tone) - 1
 
@@ -125,7 +118,21 @@ def _alwaysFlat(tone: float) -> int:
     return bisect_left(_majorScale, tone)
 
 
+def _closestSharp(tone: float) -> int:
+    if tone > 11.5:
+        return 7
+    return bisect_round(_majorScale, tone, roundingMode=RoundingMode.HALF_DOWN)
+
+
+def _closestFlat(tone: float) -> int:
+    if tone >= 11.5:
+        return 7
+    return bisect_round(_majorScale, tone, roundingMode=RoundingMode.HALF_UP)
+
+
 def _closestFlatFSharp(tone: float) -> int:
+    if tone >= 11.5:
+        return 7
     deg = bisect_round(_majorScale, tone, roundingMode=RoundingMode.HALF_UP)
     if tone == 6:
         return 3
@@ -172,7 +179,7 @@ class AcciPrefs:
     | `10` | `6` | B flat |
     """
 
-    CLOSEST_SHARP = _makeClosestAcciPref(RoundingMode.HALF_DOWN)
+    CLOSEST_SHARP = _closestSharp
     """
     For 12edo pitches, use the lower degree and sharp sign when the tone is not a standard tone 
     in C major scale. For microtonal pitches, choose the closest standard tone in C major scale.
@@ -190,7 +197,7 @@ class AcciPrefs:
     | `10` | `5` | A sharp |
     """
 
-    CLOSEST_FLAT = _makeClosestAcciPref(RoundingMode.HALF_UP)
+    CLOSEST_FLAT = _closestFlat
     """
     For 12edo pitches, use the upper degree and flat sign when the tone is not a standard tone 
     in C major scale. For microtonal pitches, choose the closest standard tone in C major scale.
@@ -272,6 +279,10 @@ class PitchLike(metaclass=ABCMeta):
     def alter(self, acci: float = 0) -> Self:
         return self.withAcci(self.acci + acci)
 
+    @abstractmethod
+    def atOctave(self, octave: int = 0) -> "Pitch":
+        raise NotImplementedError
+
     def isEnharmonic(self, other: Self) -> bool:
         return self.tone == other.tone
 
@@ -314,10 +325,11 @@ class OPitch(PitchLike):
         cls,
         tone: float,
         acciPref: AcciPref = AcciPrefs.CLOSEST_FLAT_F_SHARP,
-    ) -> Self:  # TODO: fix problem of microtone above B or below C
+    ) -> Self:
         tone %= 12
         deg = acciPref(tone)
-        acci = tone - _majorScale[deg]
+        octaves, odeg = divmod(deg, 7)
+        acci = tone - _majorScale[odeg] - octaves * 12
         return cls(deg, acci)
 
     def __new__(cls, deg: int | str = 0, acci: float = 0) -> Self:
@@ -326,11 +338,11 @@ class OPitch(PitchLike):
         if not isinstance(deg, Integral):
             raise TypeError(f"degree must be an integer, got {deg.__class__.__name__}")
         deg %= 7
-        return cls._new_helper(deg, acci)
+        return cls._newHelper(deg, acci)
 
     @classmethod
     @lru_cache
-    def _new_helper(cls, deg: int, acci: float) -> Self:
+    def _newHelper(cls, deg: int, acci: float) -> Self:
         self = super().__new__(cls)
         self._deg = deg
         self._acci = acci
@@ -381,7 +393,7 @@ class OPitch(PitchLike):
                 return self.acci
 
     def atOctave(self, octave: int = 0) -> "Pitch":
-        return Pitch(self, octave)
+        return Pitch._newHelper(self, octave - self.tone // 12)
 
     def withAcci(self, acci: float = 0) -> Self:
         return self.__class__(self.deg, acci)
@@ -408,7 +420,7 @@ class OPitch(PitchLike):
         if other == 0:
             return self.__class__()
         if not isinstance(other, Integral):
-            raise TypeError(f"can only multiply by integers, got {type ( other )}")
+            raise TypeError(f"can only multiply by integers, got {type(other)}")
         deg = self.deg * other
         tone = self.tone * other
         octave, deg = divmod(deg, 7)
@@ -416,7 +428,7 @@ class OPitch(PitchLike):
         return self.__class__(deg, acci)
 
     def __repr__(self):
-        return f"{self.__class__.__name__}({_noteNames [ self.deg ]}{self.acci:+.2f})"
+        return f"{self.__class__.__name__}({_noteNames[self.deg]}{self.acci:+.2f})"
 
     def __hash__(self) -> int:
         return hash((self.deg, self.acci))
@@ -426,6 +438,14 @@ class Pitch(PitchLike):
     """
     Represents a pitch with specific octave, or an interval that may cross multiple octaves.
     """
+
+    __slots__ = ("_opitch", "_octave")
+
+    @classmethod
+    def fromTone(cls, tone: float, acciPref: AcciPref = AcciPrefs.CLOSEST_FLAT_F_SHARP):
+        opitch = OPitch.fromTone(tone, acciPref)
+        octave = (tone - opitch.tone) // 12
+        return cls._newHelper(opitch, octave)
 
     @overload
     def __new__(cls, deg: int = 0, acci: float = 0) -> Self: ...
@@ -442,11 +462,11 @@ class Pitch(PitchLike):
         else:
             octave, odeg = divmod(arg1, 7)
             opitch = OPitch(odeg, arg2)
-        return cls._new_helper(opitch, octave)
+        return cls._newHelper(opitch, octave)
 
     @classmethod
     @lru_cache
-    def _new_helper(cls, opitch: OPitch, octave: int) -> Self:
+    def _newHelper(cls, opitch: OPitch, octave: int) -> Self:
         self = super().__new__(cls)
         self._opitch = opitch
         self._octave = octave
@@ -487,6 +507,9 @@ class Pitch(PitchLike):
     def withAcci(self, acci: float = 0) -> Self:
         return self.opitch.withAcci(acci).atOctave(self.octave)
 
+    def atOctave(self, octave: int = 0) -> Self:
+        return self.opitch.atOctave(octave)
+
     def hz(self, A0: float = 440) -> float:
         return A0 * np.power(2, (self.tone - 9) / 12)
 
@@ -521,6 +544,17 @@ class Pitch(PitchLike):
 
     def __hash__(self) -> int:
         return hash((self.opitch, self.octave))
+
+
+def _scaleAlter(
+    pitches: np.ndarray[OPitch], deg: int, acci: float
+) -> np.ndarray[OPitch]:
+    if acci != 0:
+        if deg == 0:
+            pitches[1:] = np.array([p.alter(-acci) for p in pitches[1:]])
+        else:
+            pitches[deg] = pitches[deg].alter(acci)
+    return pitches
 
 
 class Scale(Sequence[OPitch], Set[OPitch]):
@@ -582,20 +616,48 @@ class Scale(Sequence[OPitch], Set[OPitch]):
         """
         return np.diff(self._pitches, append=OPitch())
 
-    def alter(self, idx: int | Iterable[int], acci: float | Iterable[float]) -> Self:
-        newPitches = self._pitches.copy()
-        if isinstance(idx, Iterable):  # multiple index
-            if isinstance(acci, Iterable):  # multiple accidentals
-                for i, a in zip(idx, acci):
-                    newPitches[i] = newPitches[i].alter(a)
-            else:  # single accidental
-                for i in idx:
-                    newPitches[i] = newPitches[i].alter(acci)
-        else:  # single index, single accidental
-            newPitches[idx] = newPitches[idx].alter(acci)
+    @overload
+    def alter(self, idx: int, acci: float) -> Self: ...
+
+    @overload
+    def alter(self, idx: Iterable[int], acci: Iterable[float] | float) -> Self: ...
+
+    @overload
+    def alter(self, acci: Iterable[float]) -> Self: ...
+
+    def alter(
+        self,
+        arg1: int | Iterable[int] | Iterable[float],
+        arg2: float | Iterable[float] | None = None,
+    ) -> Self:
+        """
+        Apply alterations to the scale by adjusting the accidentals of specific pitches.
+        """
+        if arg2 is None:
+            if isinstance(arg1, Iterable):
+                newPitches = self._pitches.copy()
+                for i, acci in enumerate(arg1):
+                    _scaleAlter(newPitches, i, acci)
+            else:
+                return self
+        else:
+            if isinstance(arg1, Iterable):
+                if isinstance(arg2, Iterable):
+                    newPitches = self._pitches.copy()
+                    for i, acci in zip(arg1, arg2):
+                        _scaleAlter(newPitches, i, acci)
+                else:
+                    newPitches = self._pitches.copy()
+                    for i in arg1:
+                        _scaleAlter(newPitches, i, arg2)
+            else:
+                newPitches = self._pitches.copy()
+                _scaleAlter(newPitches, arg1, arg2)
         return self.__class__(newPitches)
 
     def __contains__(self, value):
+        # a scale is an ordered sequence
+        # so use binary search
         if not isinstance(value, PitchLike):
             return False
         idx = bisect_left(self._pitches, value)
@@ -611,12 +673,20 @@ class Scale(Sequence[OPitch], Set[OPitch]):
         )
 
     def __or__(self, other: Self):
-        return self.__class__(it.chain(self._pitches, other._pitches))
+        return self.__class__(it.chain(self._pitches[1:], other._pitches[1:]))
 
     def combine(self, other: Self, offset: OPitch = OPitch()) -> Self:
-        return self.__class__(it.chain(self._pitches, other._pitches + offset))
+        """
+        Combine the current scale with another scale shifted by an interval. The resulting scale
+        contains all the pitches of the current scale and the second scale's notes shifted by
+        the given interval, repeating notes removed and sorted in ascending order.
+        """
+        return self.__class__(it.chain(self._pitches[1:], other._pitches + offset))
 
     def selfCombine(self, offset: OPitch = OPitch()) -> Self:
+        """
+        Similar to `combine`, but the second scale is the current scale itself.
+        """
         return self.combine(self, offset)
 
     def __neg__(self) -> Self:

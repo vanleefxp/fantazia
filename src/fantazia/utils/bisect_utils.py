@@ -32,27 +32,25 @@ def bisect_round(
       When `x` has the same distance to both items, follows `roundingMode`.
     """
     idx = bisect_left(a, x, lo, hi, key=key)
-    if a[idx] == x or idx <= 0:
+    if idx >= len(a):
+        return idx - 1
+    if idx <= 0 or a[idx] == x:
         return idx
-    elif idx >= len(a):
+    prevItem = a[idx - 1]
+    nextItem = a[idx]
+    dl = x - prevItem
+    dr = nextItem - prevItem
+    if dr < dl:
+        return idx
+    elif dr > dl:
         return idx - 1
     else:
-        # TODO: add rounding mode support
-        prevItem = a[idx - 1]
-        nextItem = a[idx]
-        dl = x - prevItem
-        dr = nextItem - prevItem
-        if dr < dl:
-            return idx
-        elif dr > dl:
+        if roundingMode == RoundingMode.HALF_DOWN:
             return idx - 1
+        elif roundingMode == RoundingMode.HALF_EVEN:
+            return idx - 1 if idx % 2 == 0 else idx
         else:
-            if roundingMode == RoundingMode.HALF_DOWN:
-                return idx - 1
-            elif roundingMode == RoundingMode.HALF_EVEN:
-                return idx - 1 if idx % 2 == 0 else idx
-            else:
-                return idx
+            return idx
 
 
 def bsearch(
