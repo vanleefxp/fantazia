@@ -4,7 +4,6 @@ from bisect import bisect_left
 from enum import StrEnum
 
 import numpy as np
-from sklearn.cluster import DBSCAN
 
 __all__ = ["bisect_round", "bsearch", "RoundingMode"]
 
@@ -85,6 +84,8 @@ def approxGCD(data: Iterable[float], tolerance: float) -> float:
     """
     find a value `k` such that all data elements are approximately multiples of `k`
     """
+    from sklearn.cluster import DBSCAN
+
     dbscan = DBSCAN(eps=tolerance, min_samples=1)
     data = np.array(data, dtype=float)
     while len(data) > 1:

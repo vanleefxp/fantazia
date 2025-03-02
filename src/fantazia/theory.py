@@ -1,4 +1,4 @@
-from collections.abc import Callable, Sequence, Set, Iterable
+from collections.abc import Callable, Sequence, Set, Iterable, Iterator
 from typing import Self, overload
 from numbers import Integral
 from abc import ABCMeta, abstractmethod
@@ -107,6 +107,29 @@ that tone. The accidental can be later computed by taking the difference between
 tone and the standard reference tone in C major scale. Some predefined accidental preference
 rules can be found in `AcciPrefs`.
 """
+
+
+def _accidentalToStr(acci: float) -> str:
+    if acci == 0:
+        return ""
+    elif acci > 0:
+        if acci % 1 == 0:
+            acci = int(acci)
+            if acci <= 3:
+                return "+" * acci
+            else:
+                return f"[{acci:+d}]"
+        else:
+            return f"[{acci:+.3f}]"
+    else:
+        if acci % 1 == 0:
+            acci = int(acci)
+            if acci >= -3:
+                return "-" * abs(acci)
+            else:
+                return f"[{acci:+d}]"
+        else:
+            return f"[{acci:+.3f}]"
 
 
 def _alwaysSharp(tone: float) -> int:
@@ -336,6 +359,8 @@ class OPitch(PitchLike):
             deg = ord(deg.upper()) - 67
         if not isinstance(deg, Integral):
             raise TypeError(f"degree must be an integer, got {deg.__class__.__name__}")
+        if acci % 1 == 0:
+            acci = int(acci)
         deg %= 7
         return cls._newHelper(deg, acci)
 
@@ -426,8 +451,11 @@ class OPitch(PitchLike):
         acci = tone - _majorScale[deg] - octave * 12 + self.acci
         return self.__class__(deg, acci)
 
-    def __repr__(self):
-        return f"{self.__class__.__name__}({_noteNames[self.deg]}{self.acci:+.2f})"
+    def __str__(self) -> str:
+        return f"{_noteNames[self.deg]}{_accidentalToStr(self.acci)}"
+
+    def __repr__(self) -> str:
+        return f"{self.__class__.__name__}({str(self)})"
 
     def __hash__(self) -> int:
         return hash((self.deg, self.acci))
@@ -537,9 +565,13 @@ class Pitch(PitchLike):
         acci = tone - _majorScale[odeg] - octave * 12 + self.acci
         return OPitch(odeg, acci).atOctave(octave)
 
+    def __str__(self):
+        return (
+            f"{_noteNames[self.opitch.deg]}{self.octave}{_accidentalToStr(self.acci)}"
+        )
+
     def __repr__(self):
-        return f"{self.__class__.__name__}({
-            _noteNames [ self.opitch.deg ]}{self.octave}{self.acci:+.2f})"
+        return f"{self.__class__.__name__}({str(self)})"
 
     def __hash__(self) -> int:
         return hash((self.opitch, self.octave))
@@ -564,11 +596,11 @@ def _scaleInvert(pitches: np.ndarray[OPitch]) -> np.ndarray[OPitch]:
 
 class Mode(Sequence[OPitch], Set[OPitch]):
     """
-    A scale is a sequence of unique octave intervals in ascending order, starting from
+    A **mode** is a sequence of unique octave intervals in ascending order, starting from
     perfect unison.
     """
 
-    __slots__ = ("_pitches",)
+    __slots__ = ("_pitches", "_cyc")
 
     @classmethod
     def _newFromTrustedArray(cls, pitches: np.ndarray[OPitch]) -> Self:
@@ -608,14 +640,18 @@ class Mode(Sequence[OPitch], Set[OPitch]):
 
     def __getitem__(self, key: int | slice | Iterable[int]) -> OPitch | Self:
         if isinstance(key, slice):  # generate a new scale by slicing
-            start, _, step = key.indices(len(self))
+            start, stop, step = key.indices(len(self))
             newPitches = self._pitches[key].copy()
             if len(newPitches) == 0:
                 raise IndexError("empty slice cannot make a scale")
-            if start > 0:  # not starting from first note
+            if step < 0:
+                print(newPitches)
+                newPitches = np.roll(newPitches, 1)
                 newPitches -= newPitches[0]
-            if step < 0:  # inverted
-                newPitches = _scaleInvert(newPitches)
+                newPitches[1:] *= -1
+            else:
+                if start > 0:  # not starting from first note
+                    newPitches -= newPitches[0]
             return self._newFromTrustedArray(newPitches)
         elif isinstance(key, Iterable):  # generate a new scale by a set of indices
             indices = SortedSet(key)
@@ -628,11 +664,18 @@ class Mode(Sequence[OPitch], Set[OPitch]):
         else:  # get a pitch by index
             return self._pitches[key]
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self._pitches)
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[OPitch]:
         return iter(self._pitches)
+
+    @property
+    def cyc(self) -> "_ModeCyclicAccessor":
+        """Cyclic slicing and access support."""
+        if not hasattr(self, "_cyc"):
+            self._cyc = _ModeCyclicAccessor(self)
+        return self._cyc
 
     def roll(self, n: int) -> Self:
         newPitches = np.roll(self._pitches, n)
@@ -727,11 +770,70 @@ class Mode(Sequence[OPitch], Set[OPitch]):
         newPitches = _scaleInvert(self._pitches)
         return self._newFromTrustedArray(newPitches)
 
+    def __str__(self) -> str:
+        return f"({', '.join(map(str, self._pitches))})"
+
     def __repr__(self) -> str:
-        return f"{self.__class__.__name__}({", ".join(repr(p) for p in self._pitches)})"
+        return f"{self.__class__.__name__}{str(self)}"
 
     def __hash__(self) -> int:
         return hash(tuple(self._pitches))
+
+
+class _ModeCyclicAccessor:
+    """Helper type providing cyclic indexing and slicing for `Mode` objects."""
+
+    def __new__(cls, parent: Mode):
+        return cls._newHelper(parent)
+
+    @classmethod
+    @lru_cache
+    def _newHelper(cls, parent: Mode) -> Self:
+        self = super().__new__(cls)
+        self._parent = parent
+        return self
+
+    @overload
+    def __getitem__(self, key: int) -> OPitch: ...
+
+    @overload
+    def __getitem__(self, key: slice | Iterable[int]) -> Mode: ...
+
+    def __getitem__(self, key: int | slice | Iterable[int]) -> OPitch | Mode:
+        if isinstance(key, slice):
+            if key.step == 0:
+                if (
+                    key.start is not None
+                    and key.stop is not None
+                    and key.start >= key.stop
+                ):
+                    raise IndexError("empty slice cannot make a scale")
+                return Mode()
+            negStep = key.step is not None and key.step < 0
+            if negStep:
+                roll = -key.start - 1 if key.stop is not None else -1
+                key = slice(-1, key.stop, key.step)
+            else:
+                roll = -key.start if key.start is not None else 0
+                key = slice(0, key.stop, key.step)
+            newPitches = np.roll(self._parent._pitches, roll)[key]
+            if len(newPitches) == 0:
+                raise IndexError("empty slice cannot make a scale")
+            newPitches -= newPitches[0]
+            if negStep:
+                newPitches[1:] *= -1
+            return Mode._newFromTrustedArray(newPitches)
+        elif isinstance(key, Iterable):
+            key = np.array(list(set(key)))
+            start = key[0]
+            key -= start
+            key %= len(self._parent)
+            key.sort()
+            newPitches = np.roll(self._parent._pitches, -start)[key]
+            return Mode._newFromTrustedArray(newPitches)
+        else:
+            key %= len(self._parent)
+            return self._parent._pitches[key]
 
 
 class Modes:
@@ -739,22 +841,57 @@ class Modes:
 
     MAJOR = IONIAN = Mode(range(1, 7))
     HARMONIC_MAJOR = MAJOR.alter(5, -1)
-    DORIAN = MAJOR.roll(-1)
-    PHRYGIAN = MAJOR.roll(-2)
-    LYDIAN = MAJOR.roll(-3)
-    MIXOLYDIAN = MAJOR.roll(-4)
-    MINOR = AOLIAN = MAJOR.roll(-5)
+    DORIAN = MAJOR.cyc[1:]
+    PHRYGIAN = MAJOR.cyc[2:]
+    LYDIAN = MAJOR.cyc[3:]
+    MIXOLYDIAN = MAJOR.cyc[4:]
+    MINOR = AOLIAN = MAJOR.cyc[5:]
     HARMONIC_MINOR = MINOR.alter(6, 1)
     MELODIC_MINOR = HARMONIC_MINOR.alter(5, 1)
-    LOCRIAN = MAJOR.roll(-6)
+    LOCRIAN = MAJOR.cyc[6:]
     MAJOR_PENTATONIC = CN_GONG = Mode(1, 2, 4, 5)
-    CN_SHANG = MAJOR_PENTATONIC.roll(-1)
-    CHNJUE = MAJOR_PENTATONIC.roll(-2)
-    CN_ZHI = MAJOR_PENTATONIC.roll(-3)
-    MINOR_PENTATONIC = CN_YU = MAJOR_PENTATONIC.roll(-4)
+    CN_SHANG = MAJOR_PENTATONIC.cyc[1:]
+    CN_JUE = MAJOR_PENTATONIC.cyc[2:]
+    CN_ZHI = MAJOR_PENTATONIC.cyc[3:]
+    MINOR_PENTATONIC = CN_YU = MAJOR_PENTATONIC.cyc[4:]
     WHOLE_TONE = WHOLE_TONE_SHARP = Mode(1, 2, OPitch(3, 1), OPitch(4, 1), OPitch(5, 1))
     WHOLE_TONE_FLAT = Mode(1, 2, OPitch(4, -1), OPitch(5, -1), OPitch(6, -1))
     BLUES = Mode(OPitch(2, -1), 3, OPitch(3, 1), 4, OPitch(6, -1))
+
+
+class Scale(Sequence[OPitch], Set[OPitch]):
+    def __init__(self, tonic: OPitch = OPitch(), mode: Mode = Modes.MAJOR):
+        self._tonic = tonic
+        self._mode = mode
+        super().__init__()
+
+    @property
+    def tonic(self) -> OPitch:
+        return self._tonic
+
+    @property
+    def mode(self) -> Mode:
+        return self._mode
+
+    def __len__(self):
+        return len(self.mode)
+
+    @overload
+    def __getitem__(self, key: int) -> OPitch: ...
+
+    @overload
+    def __getitem__(self, key: slice | Iterable[int]) -> Self: ...
+
+    def __getitem__(self, key: int | slice | Iterable[int]) -> OPitch | Self:
+        if isinstance(key, slice) or isinstance(key, Iterable):
+            raise NotImplementedError
+            # TODO: implement slicing and multiple indexing
+        else:
+            return self.tonic + self.mode._pitches[key]
+
+    def __iter__(self) -> Iterator[OPitch]:
+        for interval in self.mode:
+            yield self.tonic + interval
 
 
 OInterval = OPitch
