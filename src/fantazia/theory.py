@@ -5,6 +5,7 @@ from abc import ABCMeta, abstractmethod
 from bisect import bisect_left, bisect_right
 import itertools as it
 from functools import lru_cache
+import re
 
 import numpy as np
 from sortedcontainers import SortedSet
@@ -85,20 +86,19 @@ class Qualities:
     DOUBLY_DIMINISHED = -3
 
 
-# major scale notes in circle of fifths order
+# major scale tones in circle of fifths order
 _majorScaleCo5Order = np.arange(-1, 6) * 7 % 12
 _majorScaleCo5Order.flags.writeable = False
 
-# major scale notes in increasing order
+# major scale tones in increasing order
 _majorScale = np.sort(_majorScaleCo5Order)
 _majorScale.flags.writeable = False
 
-_degreeMask = np.full(12, -1, dtype=int)
-_degreeMask[_majorScale] = np.arange(7)
-_degreeMask.flags.writeable = False
-
 _perfectIntervals = frozenset((0, 3, 4))
 _noteNames = np.roll(np.array([chr(65 + i) for i in range(7)]), -2)
+_noteNameSet = frozenset(_noteNames)
+
+_trailingOctaveRe = re.compile(r"_[\+\-]?\d+$")
 
 type AcciPref = Callable[[float], int]
 """
@@ -130,6 +130,44 @@ def _accidentalToStr(acci: float) -> str:
                 return f"[{acci:+d}]"
         else:
             return f"[{acci:+.3f}]"
+
+
+def _parseOPitch(src: str) -> "OPitch":
+    noteName = src[0].upper()
+    if noteName not in _noteNameSet:
+        raise ValueError(f"Invalid note name: {noteName}")
+    deg = (ord(noteName) - 67) % 7
+    if len(src) == 0:
+        raise ValueError("Empty pitch string")
+    if len(src) == 1:
+        return OPitch._newHelper(deg, 0)
+    if src[1] == "[":  # accidental value wrapped in []
+        acci = float(src[2:-1])
+        if acci % 1 == 0:
+            acci = int(acci)
+    else:
+        acci = 0
+        for ch in src[1:]:
+            match ch:
+                case "+":  # "+" for sharp
+                    acci += 1
+                case "-":  # "-" for flat
+                    acci -= 1
+                case _:
+                    raise ValueError(f"Invalid accidental token: {ch}")
+    return OPitch._newHelper(deg, acci)
+
+
+def _parsePitch(src: str) -> "Pitch":
+    if not src[-1].isdigit():
+        # octave not specified, assume octave 0
+        opitch = _parseOPitch(src)
+        octave = 0
+    else:
+        match: re.Match[str] = _trailingOctaveRe.search(src)
+        opitch = _parseOPitch(src[: match.start()])
+        octave = int(match.group()[1:])
+    return Pitch._newHelper(opitch, octave)
 
 
 def _alwaysSharp(tone: float) -> int:
@@ -358,14 +396,29 @@ class OPitch(PitchLike):
         acci = tone - _majorScale[odeg] - octaves * 12
         return cls(deg, acci)
 
-    def __new__(cls, deg: int | str = 0, acci: float = 0) -> Self:
-        if isinstance(deg, str):
-            deg = ord(deg.upper()) - 67
-        if not isinstance(deg, Integral):
-            raise TypeError(f"degree must be an integer, got {deg.__class__.__name__}")
+    @overload
+    def __new__(cls, src: str) -> Self: ...
+
+    @overload
+    def __new__(cls, deg: int | str = 0, acci: float = 0) -> Self: ...
+
+    def __new__(cls, arg1: int | str = 0, arg2: float = 0) -> Self:
+        if isinstance(arg1, str):
+            if len(arg1) > 1:  # parse as pitch string
+                return _parseOPitch(arg1)
+            else:  # parse as note name
+                if len(arg1) == 0:
+                    raise ValueError("Empty pitch string")
+                if arg1 not in _noteNameSet:
+                    raise ValueError(f"Invalid note name: {deg}")
+                deg = (ord(arg1.upper()) - 67) % 7
+        elif not isinstance(arg1, Integral):
+            raise TypeError(f"degree must be an integer, got {arg1.__class__.__name__}")
+        else:
+            deg = arg1 % 7
+        acci = arg2
         if acci % 1 == 0:
             acci = int(acci)
-        deg %= 7
         return cls._newHelper(deg, acci)
 
     @classmethod
@@ -447,6 +500,8 @@ class OPitch(PitchLike):
     def __mul__(self, other: int) -> Self:
         if other == 0:
             return self.__class__()
+        if other == 1:
+            return self
         if not isinstance(other, Integral):
             raise TypeError(f"can only multiply by integers, got {type(other)}")
         deg = self.deg * other
@@ -479,12 +534,17 @@ class Pitch(PitchLike):
         return cls._newHelper(opitch, octave)
 
     @overload
+    def __new__(cls, src: str) -> Self: ...
+
+    @overload
     def __new__(cls, deg: int = 0, acci: float = 0) -> Self: ...
 
     @overload
     def __new__(cls, opitch: PitchLike = OPitch(), octave: int = 0) -> Self: ...
 
-    def __new__(cls, arg1: int | PitchLike, arg2: float | int) -> Self:
+    def __new__(cls, arg1: int | PitchLike, arg2: float | int | None = None) -> Self:
+        if isinstance(arg1, str):
+            return _parsePitch(arg1)
         if isinstance(arg1, Pitch):
             arg1 = arg1.opitch
         if isinstance(arg1, OPitch):
@@ -559,6 +619,8 @@ class Pitch(PitchLike):
     def __mul__(self, other: int) -> Self:
         if other == 0:
             return self.__class__()
+        if other == 1:
+            return self
         if not isinstance(other, Integral):
             raise TypeError(
                 f"can only multiply by integers, got {other.__class__.__name__}"
@@ -571,7 +633,7 @@ class Pitch(PitchLike):
 
     def __str__(self):
         return (
-            f"{_noteNames[self.opitch.deg]}{self.octave}{_accidentalToStr(self.acci)}"
+            f"{_noteNames[self.opitch.deg]}{_accidentalToStr(self.acci)}_{self.octave}"
         )
 
     def __repr__(self):

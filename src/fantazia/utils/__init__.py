@@ -42,7 +42,7 @@ def bisect_round(
     prevItem = a[idx - 1]
     nextItem = a[idx]
     dl = x - prevItem
-    dr = nextItem - prevItem
+    dr = nextItem - x
     if dr < dl:
         return idx
     elif dr > dl:
