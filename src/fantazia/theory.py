@@ -1,16 +1,17 @@
-from collections.abc import Callable, Sequence, Set, Iterable, Iterator
-from typing import Self, overload
-from numbers import Integral
+import itertools as it
+import re
 from abc import ABCMeta, abstractmethod
 from bisect import bisect_left, bisect_right
-import itertools as it
+from collections.abc import Callable, Iterable, Iterator, Sequence, Set
 from functools import lru_cache
-import re
+from numbers import Integral
+from typing import Self, overload
+from fractions import Fraction as Q
 
 import numpy as np
 from sortedcontainers import SortedSet
 
-from .utils import bisect_round, RoundingMode
+from .utils import RoundingMode, bisect_round
 
 __all__ = [
     "AcciPref",
@@ -32,7 +33,7 @@ __all__ = [
 
 class Accis:
     """
-    Common Accidental constants.
+    Common Accidental constants as integers.
     """
 
     TRIPLE_SHARP = SSS = 3
@@ -46,7 +47,7 @@ class Accis:
 
 class Degs:
     """
-    Degree constants. Supports both letter names and fixed-do solfege notations.
+    Degree constants as integers. Supports both letter names and fixed-do solfege notations.
     """
 
     DO = C = 0
@@ -60,7 +61,7 @@ class Degs:
 
 class Intervals:
     """
-    Common intervals.
+    Degree differences of common intervals as integers.
     """
 
     UNISON = 0
@@ -120,7 +121,7 @@ def _accidentalToStr(acci: float) -> str:
             else:
                 return f"[{acci:+d}]"
         else:
-            return f"[{acci:+.3f}]"
+            return f"[{round(acci, 3):+}]"
     else:
         if acci % 1 == 0:
             acci = int(acci)
@@ -129,7 +130,7 @@ def _accidentalToStr(acci: float) -> str:
             else:
                 return f"[{acci:+d}]"
         else:
-            return f"[{acci:+.3f}]"
+            return f"[{round(acci, 3):+}]"
 
 
 def _parseOPitch(src: str) -> "OPitch":
@@ -142,7 +143,11 @@ def _parseOPitch(src: str) -> "OPitch":
     if len(src) == 1:
         return OPitch._newHelper(deg, 0)
     if src[1] == "[":  # accidental value wrapped in []
-        acci = float(src[2:-1])
+        acciSrc = src[2:-1]
+        if "/" in acciSrc:
+            acci = Q(acciSrc)
+        else:
+            acci = float(src[2:-1])
         if acci % 1 == 0:
             acci = int(acci)
     else:
@@ -397,10 +402,23 @@ class OPitch(PitchLike):
         return cls(deg, acci)
 
     @overload
-    def __new__(cls, src: str) -> Self: ...
+    def __new__(cls, src: str) -> Self:
+        """
+        Creates a new `OPitch` object from string notation. A valid string notation is a
+        note name followed by optional accidental symbols. Sharps and flats ar represented
+        by `+` and `-` symbols, respectively. `++` and `--` are used for double sharps and
+        double flats. For microtonal notations, the accidental is a float value preceded by
+        `+` of `-` wrapped in brackets.
+        """
+        ...
 
     @overload
-    def __new__(cls, deg: int | str = 0, acci: float = 0) -> Self: ...
+    def __new__(cls, deg: int | str = 0, acci: float = 0) -> Self:
+        """
+        Creates a new `OPitch` object from degree and accidental values. The degree value can
+        be either an integer or a string representing a note name.
+        """
+        ...
 
     def __new__(cls, arg1: int | str = 0, arg2: float = 0) -> Self:
         if isinstance(arg1, str):
@@ -486,10 +504,11 @@ class OPitch(PitchLike):
         deg = self.deg + other.deg
         octave, deg = divmod(deg, 7)
         tone = self.tone + other.tone
-        acci = tone - _majorScale[deg] - octave * 12 + self.acci
+        acci = tone - _majorScale[deg] - octave * 12
         return self.__class__(deg, acci)
 
     def __neg__(self) -> Self:
+        # breakpoint()
         if self.deg == 0:
             return self.__class__(0, -self.acci)
         deg = 7 - self.deg
@@ -608,7 +627,7 @@ class Pitch(PitchLike):
         deg = self.deg + other.deg
         tone = self.tone + other.tone
         octave, odeg = divmod(deg, 7)
-        acci = tone - _majorScale[odeg] - octave * 12 + self.acci
+        acci = tone - _majorScale[odeg] - octave * 12
         return OPitch(odeg, acci).atOctave(octave)
 
     def __neg__(self) -> Self:
@@ -628,7 +647,7 @@ class Pitch(PitchLike):
         deg = self.deg * other
         tone = self.tone * other
         octave, odeg = divmod(deg, 7)
-        acci = tone - _majorScale[odeg] - octave * 12 + self.acci
+        acci = tone - _majorScale[odeg] - octave * 12
         return OPitch(odeg, acci).atOctave(octave)
 
     def __str__(self):
@@ -643,7 +662,7 @@ class Pitch(PitchLike):
         return hash((self.opitch, self.octave))
 
 
-def _scaleAlter(
+def _modeAlter(
     pitches: np.ndarray[OPitch], deg: int, acci: float
 ) -> np.ndarray[OPitch]:
     if acci != 0:
@@ -654,10 +673,76 @@ def _scaleAlter(
     return pitches
 
 
-def _scaleInvert(pitches: np.ndarray[OPitch]) -> np.ndarray[OPitch]:
+def _modeInvert(pitches: np.ndarray[OPitch]) -> np.ndarray[OPitch]:
     pitches = -pitches
     pitches[1:] = pitches[1:][::-1]
     return pitches
+
+
+def _modeSlice(mode: "Mode", key: slice) -> "tuple[Mode, OPitch]":
+    start, _, step = key.indices(len(mode))
+    newPitches = mode._pitches[key].copy()
+    if len(newPitches) == 0:
+        raise IndexError("empty slice cannot make a scale")
+    if step < 0:
+        newPitches = np.roll(newPitches, 1)
+        startPitch = newPitches[0]
+        newPitches -= startPitch
+        newPitches[1:] *= -1
+    else:
+        if start > 0:  # not starting from first note
+            startPitch = newPitches[0]
+            newPitches -= startPitch
+        else:
+            startPitch = OPitch()
+    return Mode._newFromTrustedArray(newPitches), startPitch
+
+
+def _modeMultiIndex(mode: "Mode", key: Iterable[int]) -> "tuple[Mode, OPitch]":
+    indices = SortedSet(key)
+    if len(indices) == 0:
+        raise IndexError("empty set cannot make a scale")
+    newPitches = mode._pitches[list(indices)].copy()
+    if indices[0] > 0:
+        startPitch = newPitches[0]
+        newPitches -= startPitch
+    else:
+        startPitch = OPitch()
+    return Mode._newFromTrustedArray(newPitches), startPitch
+
+
+def _modeCycSlice(mode: "Mode", key: slice) -> "tuple[Mode, OPitch]":
+    if key.step == 0:
+        if key.start is not None and key.stop is not None and key.start >= key.stop:
+            raise IndexError("empty slice cannot make a scale")
+        return Mode(), OPitch()
+    negStep = key.step is not None and key.step < 0
+    if negStep:
+        roll = -key.start - 1 if key.start is not None else -1
+        key = slice(-1, key.stop, key.step)
+    else:
+        roll = -key.start if key.start is not None else 0
+        key = slice(0, key.stop, key.step)
+    newPitches = np.roll(mode._pitches, roll)[key].copy()
+    if len(newPitches) == 0:
+        raise IndexError("empty slice cannot make a scale")
+    startPitch = newPitches[0]
+    newPitches -= startPitch
+    if negStep:
+        newPitches[1:] = -newPitches[1:]
+    return Mode._newFromTrustedArray(newPitches), startPitch
+
+
+def _modeCycMultiIndex(mode: "Mode", key: Iterable[int]) -> "tuple[Mode, OPitch]":
+    key = np.array(list(set(key)))
+    start = key[0]
+    key -= start
+    key %= len(mode)
+    key.sort()
+    newPitches = np.roll(mode._pitches, -start)[key]
+    startPitch = newPitches[0]
+    newPitches -= startPitch
+    return Mode._newFromTrustedArray(newPitches), startPitch
 
 
 class Mode(Sequence[OPitch], Set[OPitch]):
@@ -676,10 +761,10 @@ class Mode(Sequence[OPitch], Set[OPitch]):
         return self
 
     @overload
-    def __new__(cls, pitches: Iterable[OPitch | int]) -> Self: ...
+    def __new__(cls, pitches: Iterable[OPitch | int | str]) -> Self: ...
 
     @overload
-    def __new__(cls, *pitches: OPitch | int) -> Self: ...
+    def __new__(cls, *pitches: OPitch | int | str) -> Self: ...
 
     def __new__(cls, *args) -> Self:
         if len(args) == 1 and isinstance(args[0], Iterable):
@@ -706,26 +791,9 @@ class Mode(Sequence[OPitch], Set[OPitch]):
 
     def __getitem__(self, key: int | slice | Iterable[int]) -> OPitch | Self:
         if isinstance(key, slice):  # generate a new scale by slicing
-            start, _, step = key.indices(len(self))
-            newPitches = self._pitches[key].copy()
-            if len(newPitches) == 0:
-                raise IndexError("empty slice cannot make a scale")
-            if step < 0:
-                newPitches = np.roll(newPitches, 1)
-                newPitches -= newPitches[0]
-                newPitches[1:] *= -1
-            else:
-                if start > 0:  # not starting from first note
-                    newPitches -= newPitches[0]
-            return self._newFromTrustedArray(newPitches)
+            return _modeSlice(self, key)[0]
         elif isinstance(key, Iterable):  # generate a new scale by a set of indices
-            indices = SortedSet(key)
-            if len(indices) == 0:
-                raise IndexError("empty set cannot make a scale")
-            newPitches = self._pitches[list(indices)].copy()
-            if indices[0] > 0:
-                newPitches -= newPitches[0]
-            return self._newFromTrustedArray(newPitches)
+            return _modeMultiIndex(self, key)[0]
         else:  # get a pitch by index
             return self._pitches[key]
 
@@ -735,17 +803,15 @@ class Mode(Sequence[OPitch], Set[OPitch]):
     def __iter__(self) -> Iterator[OPitch]:
         return iter(self._pitches)
 
+    def __reversed__(self) -> Iterator[OPitch]:
+        return reversed(self._pitches)
+
     @property
     def cyc(self) -> "_ModeCyclicAccessor":
         """Cyclic slicing and access support."""
         if not hasattr(self, "_cyc"):
             self._cyc = _ModeCyclicAccessor(self)
         return self._cyc
-
-    def roll(self, n: int) -> Self:
-        newPitches = np.roll(self._pitches, n)
-        newPitches -= newPitches[0]
-        return self._newFromTrustedArray(newPitches)
 
     def diff(self) -> Sequence[OPitch]:
         """
@@ -775,7 +841,7 @@ class Mode(Sequence[OPitch], Set[OPitch]):
             if isinstance(arg1, Iterable):
                 newPitches = self._pitches.copy()
                 for i, acci in enumerate(arg1):
-                    _scaleAlter(newPitches, i, acci)
+                    _modeAlter(newPitches, i, acci)
             else:
                 return self
         else:
@@ -783,14 +849,14 @@ class Mode(Sequence[OPitch], Set[OPitch]):
                 if isinstance(arg2, Iterable):
                     newPitches = self._pitches.copy()
                     for i, acci in zip(arg1, arg2):
-                        _scaleAlter(newPitches, i, acci)
+                        _modeAlter(newPitches, i, acci)
                 else:
                     newPitches = self._pitches.copy()
                     for i in arg1:
-                        _scaleAlter(newPitches, i, arg2)
+                        _modeAlter(newPitches, i, arg2)
             else:
                 newPitches = self._pitches.copy()
-                _scaleAlter(newPitches, arg1, arg2)
+                _modeAlter(newPitches, arg1, arg2)
         return self.__class__(newPitches)
 
     def __contains__(self, value) -> bool:
@@ -825,14 +891,14 @@ class Mode(Sequence[OPitch], Set[OPitch]):
         """
         return self.__class__(it.chain(self._pitches[1:], other._pitches + offset))
 
-    def selfCombine(self, offset: OPitch = OPitch()) -> Self:
+    def stack(self, offset: OPitch = OPitch()) -> Self:
         """
         Similar to `combine`, but the second scale is the current scale itself.
         """
         return self.combine(self, offset)
 
     def __neg__(self) -> Self:
-        newPitches = _scaleInvert(self._pitches)
+        newPitches = _modeInvert(self._pitches)
         return self._newFromTrustedArray(newPitches)
 
     def __str__(self) -> str:
@@ -847,6 +913,8 @@ class Mode(Sequence[OPitch], Set[OPitch]):
 
 class _ModeCyclicAccessor:
     """Helper type providing cyclic indexing and slicing for `Mode` objects."""
+
+    __slots__ = ("_parent",)
 
     def __new__(cls, parent: Mode):
         return cls._newHelper(parent)
@@ -866,43 +934,16 @@ class _ModeCyclicAccessor:
 
     def __getitem__(self, key: int | slice | Iterable[int]) -> OPitch | Mode:
         if isinstance(key, slice):
-            if key.step == 0:
-                if (
-                    key.start is not None
-                    and key.stop is not None
-                    and key.start >= key.stop
-                ):
-                    raise IndexError("empty slice cannot make a scale")
-                return Mode()
-            negStep = key.step is not None and key.step < 0
-            if negStep:
-                roll = -key.start - 1 if key.start is not None else -1
-                key = slice(-1, key.stop, key.step)
-            else:
-                roll = -key.start if key.start is not None else 0
-                key = slice(0, key.stop, key.step)
-            newPitches = np.roll(self._parent._pitches, roll)[key].copy()
-            if len(newPitches) == 0:
-                raise IndexError("empty slice cannot make a scale")
-            newPitches -= newPitches[0]
-            if negStep:
-                newPitches[1:] = -newPitches[1:]
-            return Mode._newFromTrustedArray(newPitches)
+            return _modeCycSlice(self._parent, key)[0]
         elif isinstance(key, Iterable):
-            key = np.array(list(set(key)))
-            start = key[0]
-            key -= start
-            key %= len(self._parent)
-            key.sort()
-            newPitches = np.roll(self._parent._pitches, -start)[key]
-            return Mode._newFromTrustedArray(newPitches)
+            return _modeCycMultiIndex(self._parent, key)[0]
         else:
             key %= len(self._parent)
             return self._parent._pitches[key]
 
 
 class Modes:
-    """Common scales in western music."""
+    """Common modes in western music."""
 
     MAJOR = IONIAN = Mode(range(1, 7))
     HARMONIC_MAJOR = MAJOR.alter(5, -1)
@@ -925,10 +966,20 @@ class Modes:
 
 
 class Scale(Sequence[OPitch], Set[OPitch]):
-    def __init__(self, tonic: OPitch = OPitch(), mode: Mode = Modes.MAJOR):
+    """A scale is a sequence of pitches in a specific mode, starting from a tonic."""
+
+    __slots__ = ("_tonic", "_mode", "_cyc")
+
+    def __new__(cls, tonic: OPitch = OPitch(), mode: Mode = Modes.MAJOR):
+        return cls._newHelper(tonic, mode)
+
+    @classmethod
+    @lru_cache
+    def _newHelper(cls, tonic: OPitch, mode: Mode) -> Self:
+        self = super().__new__(self.__class__)
         self._tonic = tonic
         self._mode = mode
-        super().__init__()
+        return self
 
     @property
     def tonic(self) -> OPitch:
@@ -938,8 +989,20 @@ class Scale(Sequence[OPitch], Set[OPitch]):
     def mode(self) -> Mode:
         return self._mode
 
+    @property
+    def cyc(self) -> "_ScaleCyclicAccessor":
+        """Cyclic slicing and access support."""
+        if not hasattr(self, "_cyc"):
+            self._cyc = _ScaleCyclicAccessor(self)
+        return self._cyc
+
     def __len__(self):
         return len(self.mode)
+
+    def __contains__(self, value: object):
+        if isinstance(value, OPitch):
+            return (value - self.tonic) in self.mode
+        return False
 
     @overload
     def __getitem__(self, key: int) -> OPitch: ...
@@ -948,15 +1011,57 @@ class Scale(Sequence[OPitch], Set[OPitch]):
     def __getitem__(self, key: slice | Iterable[int]) -> Self: ...
 
     def __getitem__(self, key: int | slice | Iterable[int]) -> OPitch | Self:
-        if isinstance(key, slice) or isinstance(key, Iterable):
-            raise NotImplementedError
-            # TODO: implement slicing and multiple indexing
+        if isinstance(key, slice):
+            newMode, startPitch = _modeSlice(self.mode, key)
+            return self.__class__(self.tonic + startPitch, newMode)
+        elif isinstance(key, Iterable):
+            newMode, startPitch = _modeMultiIndex(self.mode, key)
+            return self.__class__(self.tonic + startPitch, newMode)
         else:
             return self.tonic + self.mode._pitches[key]
 
     def __iter__(self) -> Iterator[OPitch]:
         for interval in self.mode:
             yield self.tonic + interval
+
+    def __repr__(self):
+        return f"{self.__class__.__name__}{str(self)}"
+
+    def __str__(self) -> str:
+        return f"({', '.join(self)})"
+
+
+class _ScaleCyclicAccessor:
+    """Helper type providing cyclic indexing and slicing for `Scale` objects."""
+
+    __slots__ = ("_parent",)
+
+    def __new__(cls, parent: Scale):
+        return cls._newHelper(parent)
+
+    @classmethod
+    @lru_cache
+    def _newHelper(cls, parent: Scale) -> Self:
+        self = super().__new__(cls)
+        self._parent = parent
+        return self
+
+    @overload
+    def __getitem__(self, key: int) -> OPitch: ...
+
+    @overload
+    def __getitem__(self, key: slice | Iterable[int]) -> Scale: ...
+
+    def __getitem__(self, key: int | slice | Iterable[int]) -> OPitch | Scale:
+        if isinstance(key, slice):
+            newMode, startPitch = _modeCycSlice(self._parent.mode, key)
+            return Scale._newHelper(self._parent.tonic + startPitch, newMode)
+        elif isinstance(key, Iterable):
+            newMode, startPitch = _modeCycMultiIndex(self._parent.mode, key)
+            return Scale._newHelper(self._parent.tonic + startPitch, newMode)
+        else:
+            key %= len(self._parent.mode)
+            return self._parent[key]
 
 
 OInterval = OPitch
