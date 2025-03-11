@@ -25,6 +25,7 @@ __all__ = [
     "OPitch",
     "Pitch",
     "Mode",
+    "Scale",
     "OInterval",
     "Interval",
     "OIntervalSet",
@@ -966,17 +967,21 @@ class Modes:
 
 
 class Scale(Sequence[OPitch], Set[OPitch]):
-    """A scale is a sequence of pitches in a specific mode, starting from a tonic."""
+    """A **scale** is a sequence of pitches in a specific mode, starting from a tonic."""
 
     __slots__ = ("_tonic", "_mode", "_cyc")
 
-    def __new__(cls, tonic: OPitch = OPitch(), mode: Mode = Modes.MAJOR):
+    def __new__(
+        cls, tonic: OPitch | int | str = OPitch(), mode: Mode = Modes.MAJOR
+    ) -> Self:
+        if not isinstance(tonic, OPitch):
+            tonic = OPitch(tonic)
         return cls._newHelper(tonic, mode)
 
     @classmethod
     @lru_cache
     def _newHelper(cls, tonic: OPitch, mode: Mode) -> Self:
-        self = super().__new__(self.__class__)
+        self = super().__new__(cls)
         self._tonic = tonic
         self._mode = mode
         return self
@@ -996,6 +1001,13 @@ class Scale(Sequence[OPitch], Set[OPitch]):
             self._cyc = _ScaleCyclicAccessor(self)
         return self._cyc
 
+    def diff(self) -> Sequence[OPitch]:
+        """
+        Returns the interval structure of the scale, i.e., the differences between adjacent
+        pitches.
+        """
+        return self.mode.diff()
+
     def __len__(self):
         return len(self.mode)
 
@@ -1003,6 +1015,20 @@ class Scale(Sequence[OPitch], Set[OPitch]):
         if isinstance(value, OPitch):
             return (value - self.tonic) in self.mode
         return False
+
+    def __eq__(self, other: object):
+        if isinstance(other, Scale):
+            return self.tonic == other.tonic and self.mode == other.mode
+        return False
+
+    def __add__(self, other: OPitch) -> Self:
+        return self.__class__(self.tonic + other, self.mode)
+
+    def __sub__(self, other) -> Self:
+        return self.__class__(self.tonic - other, self.mode)
+
+    def __neg__(self) -> Self:
+        return self.__class__(self.tonic, -self.mode)
 
     @overload
     def __getitem__(self, key: int) -> OPitch: ...
@@ -1028,7 +1054,10 @@ class Scale(Sequence[OPitch], Set[OPitch]):
         return f"{self.__class__.__name__}{str(self)}"
 
     def __str__(self) -> str:
-        return f"({', '.join(self)})"
+        return f"({', '.join(map(str, self))})"
+
+    def __hash__(self):
+        return hash((self.tonic, self.mode))
 
 
 class _ScaleCyclicAccessor:
