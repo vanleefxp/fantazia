@@ -1,19 +1,70 @@
 from collections.abc import Iterable
-from typing import Sequence, TypeVar, Callable
+from typing import Sequence, TypeVar, Callable, Type
 from bisect import bisect_left
-from enum import StrEnum
+from enum import StrEnum, IntEnum
 
 import numpy as np
 
-__all__ = ["bisect_round", "bsearch", "RoundingMode"]
+__all__ = ["bisect_round", "bsearch", "RoundMode"]
 
 T = TypeVar("T")
 
 
-class RoundingMode(StrEnum):
+class classproperty(property):
+    def __get__(self, owner_self: T, owner_cls: Type[T]):
+        return self.fget(owner_cls)
+
+
+class classconst(classproperty):
+    def __set__(self, instance, value):
+        raise ValueError("Cannot set constant value")
+
+
+class Rounding(IntEnum):
+    FLOOR = -1
+    ROUND = 0
+    CEIL = 1
+
+
+class RoundMode(StrEnum):
     HALF_UP = "half-up"
     HALF_EVEN = "half-even"
     HALF_DOWN = "half-down"
+
+
+def rounding(
+    x: float,
+    step: float = 1,
+    rounding: Rounding = Rounding.ROUND,
+    roundMode: RoundMode = RoundMode.HALF_EVEN,
+) -> tuple[float, float]:
+    q, r = divmod(x, step)
+    if r == 0:
+        return x, 0
+    match rounding:
+        case Rounding.FLOOR:
+            return q * step, r
+        case Rounding.CEIL:
+            return (q + 1) * step, r - step
+        case Rounding.ROUND:
+            if r <= step / 2:
+                return q * step, r
+            elif r >= step / 2:
+                return (q + 1) * step, r - step
+            else:
+                match roundMode:
+                    case RoundMode.HALF_UP:
+                        return (q + 1) * step, r - step
+                    case RoundMode.HALF_EVEN:
+                        return (
+                            ((q + 1) * step, r - step) if q % 2 == 0 else (q * step, r)
+                        )
+                    case RoundMode.HALF_DOWN:
+                        return q * step, r
+                    case _:
+                        raise ValueError(f"Invalid round mode: {roundMode}")
+        case _:
+            raise ValueError(f"Invalid rounding: {rounding}")
 
 
 def bisect_round(
@@ -23,7 +74,7 @@ def bisect_round(
     hi: int | None = None,
     /,
     key: Callable[[T], int] | None = None,
-    roundingMode: RoundingMode = RoundingMode.HALF_UP,
+    roundingMode: RoundMode = RoundMode.HALF_UP,
 ) -> int:
     """
     Returns the index of item closest to `x` in sequence `a`.
@@ -48,9 +99,9 @@ def bisect_round(
     elif dr > dl:
         return idx - 1
     else:
-        if roundingMode == RoundingMode.HALF_DOWN:
+        if roundingMode == RoundMode.HALF_DOWN:
             return idx - 1
-        elif roundingMode == RoundingMode.HALF_EVEN:
+        elif roundingMode == RoundMode.HALF_EVEN:
             return idx - 1 if idx % 2 == 0 else idx
         else:
             return idx

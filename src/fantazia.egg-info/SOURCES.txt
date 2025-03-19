@@ -1,0 +1,15 @@
+LICENSE.txt
+README.md
+pyproject.toml
+src/fantazia/__init__.py
+src/fantazia/_theory.py
+src/fantazia.egg-info/PKG-INFO
+src/fantazia.egg-info/SOURCES.txt
+src/fantazia.egg-info/dependency_links.txt
+src/fantazia.egg-info/top_level.txt
+src/fantazia/synth/__init__.py
+src/fantazia/synth/_envelope.py
+src/fantazia/synth/_waveform.py
+src/fantazia/utils/__init__.py
+src/fantazia/xen/__init__.py
+src/fantazia/xen/_xen.py
