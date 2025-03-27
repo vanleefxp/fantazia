@@ -6,7 +6,7 @@ from fractions import Fraction as Q
 
 import numpy as np
 
-from .._theory import OPitch, Pitch, PitchLike
+from .._theory import OPitch, Pitch, PitchBase
 
 __all__ = ["TuningSystem", "EDO", "Pythagorean"]
 
@@ -24,10 +24,10 @@ def co5Order(deg: int, acci: int) -> int:
 
 class TuningSystem(metaclass=ABCMeta):
     @abstractmethod
-    def __call__(self, pitch: PitchLike) -> Real:
+    def __call__(self, pitch: PitchBase) -> Real:
         raise NotImplementedError
 
-    def freq(self, pitch: PitchLike) -> Real:
+    def freq(self, pitch: PitchBase) -> Real:
         return 2 ** self(pitch)
 
 
@@ -66,7 +66,7 @@ class EDO(TuningSystem):
             self._fifthSize = round(self.n * LOG_2_3_M1)
         return self._fifthSize
 
-    def tone(self, pitch: PitchLike) -> float:
+    def tone(self, pitch: PitchBase) -> float:
         if isinstance(pitch, OPitch):
             deg, acci = pitch.deg, pitch.acci
         elif isinstance(pitch, Pitch):
@@ -82,7 +82,7 @@ class EDO(TuningSystem):
             upperTone = self.fifthSize * upper % self.n
             return lowerTone * (1 - rem) + upperTone * rem + octave * self.n
 
-    def __call__(self, pitch: PitchLike) -> float:
+    def __call__(self, pitch: PitchBase) -> float:
         return self.tone(pitch) / self.n
 
     def __str__(self):
@@ -99,14 +99,14 @@ class Pythagorean(TuningSystem):
             cls._instance = super().__new__(cls)
         return cls._instance
 
-    def freq(self, pitch: PitchLike) -> Rational:
+    def freq(self, pitch: PitchBase) -> Rational:
         octave = pitch.tone // 12
         order = co5Order(pitch.deg, pitch.acci)
         numer = 3**order
         denom = 1 << (np.floor(order * LOG_2_3) - octave)
         return Q(numer, denom)
 
-    def __call__(self, pitch: PitchLike) -> float:
+    def __call__(self, pitch: PitchBase) -> float:
         return np.log2(float(self.freq(pitch)))
 
 

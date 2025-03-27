@@ -23,7 +23,7 @@ __all__ = [
     "Qualities",
     "AcciPrefs",
     "Modes",
-    "PitchLike",
+    "PitchBase",
     "OPitch",
     "Pitch",
     "Mode",
@@ -31,10 +31,12 @@ __all__ = [
     "OInterval",
     "Interval",
     "OIntervalSet",
-    "MAJOR_SCALE_TONES",
+    "DEGS_CO5",
     "MAJOR_SCALE_TONES_CO5",
-    "NOTE_NAMES",
-    "NOTE_NAME_SET",
+    "MAJOR_SCALE_TONES",
+    "MAJOR_SCALE_TONES_SET",
+    "DEG_NAMES",
+    "DEG_NAMES_SET",
 ]
 
 
@@ -94,17 +96,30 @@ class Qualities:
     DOUBLY_DIMINISHED = -3
 
 
-# major scale tones in circle of fifths order
-MAJOR_SCALE_TONES_CO5 = np.arange(-1, 6) * 7 % 12
+DEGS_CO5: Sequence[int] = np.arange(-1, 6) * 4 % 7
+"""major scale degrees in circle of fifths order"""
+DEGS_CO5.flags.writeable = False
+
+MAJOR_SCALE_TONES_CO5: Sequence[int] = np.arange(-1, 6) * 7 % 12
+"""major scale tones in circle of fifths order"""
 MAJOR_SCALE_TONES_CO5.flags.writeable = False
 
-# major scale tones in increasing order
-MAJOR_SCALE_TONES = np.sort(MAJOR_SCALE_TONES_CO5)
+MAJOR_SCALE_TONES: Sequence[int] = np.sort(MAJOR_SCALE_TONES_CO5)
+"""major scale tones in increasing order"""
 MAJOR_SCALE_TONES.flags.writeable = False
 
+MAJOR_SCALE_TONES_SET = frozenset(MAJOR_SCALE_TONES)
+"""major scale tones as a set"""
+
 _perfectIntervals = frozenset((0, 3, 4))
-NOTE_NAMES = np.roll(np.array([chr(65 + i) for i in range(7)]), -2)
-NOTE_NAME_SET = frozenset(NOTE_NAMES)
+DEG_NAMES: Sequence[str] = np.roll(np.array([chr(65 + i) for i in range(7)]), -2)
+"""degree names from C to B"""
+DEG_NAMES.flags.writeable = False
+DEG_NAMES_SET = frozenset(DEG_NAMES)
+"""degree names as a set"""
+DEG_NAMES_CO5: Sequence[str] = DEG_NAMES[DEGS_CO5]
+"""degree names in circle of fifths order"""
+DEG_NAMES_CO5.flags.writeable = False
 
 _trailingOctaveRe = re.compile(r"_[\+\-]?\d+$")
 
@@ -144,7 +159,7 @@ def _parseOPitch(src: str) -> OPitch:
     if len(src) == 0:
         raise ValueError("Empty pitch string")
     noteName = src[0].upper()
-    if noteName not in NOTE_NAME_SET:
+    if noteName not in DEG_NAMES_SET:
         raise ValueError(f"Invalid note name: {noteName}")
     deg = (ord(noteName) - 67) % 7
     if len(src) == 1:
@@ -306,7 +321,7 @@ class AcciPrefs:
     """
 
 
-class PitchLike(metaclass=ABCMeta):
+class PitchBase(metaclass=ABCMeta):
     """Base class for `OPitch` and `Pitch`."""
 
     @property
@@ -414,7 +429,7 @@ class PitchLike(metaclass=ABCMeta):
         """Convert to a `music21.pitch.Pitch` object."""
         import music21 as m21
 
-        m21_step = NOTE_NAMES[self.deg % 7]
+        m21_step = DEG_NAMES[self.deg % 7]
         m21_acci = self.acci
         m21_acci, m21_microtone = _round(
             m21_acci, 0.5 if useQuartertone else 1, rounding, roundMode
@@ -431,7 +446,7 @@ class PitchLike(metaclass=ABCMeta):
         )
 
 
-class OPitch(PitchLike):
+class OPitch(PitchBase):
     """
     Represents a pitch in an octave, or equivalently, an interval no greater than an octave.
     """
@@ -494,10 +509,10 @@ class OPitch(PitchLike):
         ...
 
     @overload
-    def __new__(cls, src: PitchLike) -> Self: ...
+    def __new__(cls, src: PitchBase) -> Self: ...
 
-    def __new__(cls, arg1: int | str | PitchLike = 0, arg2: float = 0) -> Self:
-        if isinstance(arg1, PitchLike):
+    def __new__(cls, arg1: int | str | PitchBase = 0, arg2: float = 0) -> Self:
+        if isinstance(arg1, PitchBase):
             return arg1.opitch
         if isinstance(arg1, str):
             if len(arg1) > 1:  # parse as pitch string
@@ -505,7 +520,7 @@ class OPitch(PitchLike):
             else:  # parse as note name
                 if len(arg1) == 0:
                     raise ValueError("Empty pitch string")
-                if arg1 not in NOTE_NAME_SET:
+                if arg1 not in DEG_NAMES_SET:
                     raise ValueError(f"Invalid note name: {deg}")
                 deg = (ord(arg1.upper()) - 67) % 7
         elif not isinstance(arg1, Integral):
@@ -616,7 +631,7 @@ class OPitch(PitchLike):
         return self.__class__(deg, acci)
 
     def __str__(self) -> str:
-        return f"{NOTE_NAMES[self.deg]}{_accidentalToStr(self.acci)}"
+        return f"{DEG_NAMES[self.deg]}{_accidentalToStr(self.acci)}"
 
     def __repr__(self) -> str:
         return f"{self.__class__.__name__}({str(self)})"
@@ -625,7 +640,7 @@ class OPitch(PitchLike):
         return hash((self.deg, self.acci))
 
 
-class Pitch(PitchLike):
+class Pitch(PitchBase):
     """
     Represents a pitch with specific octave, or an interval that may cross multiple octaves.
     """
@@ -655,9 +670,9 @@ class Pitch(PitchLike):
     def __new__(cls, deg: int = 0, acci: float = 0) -> Self: ...
 
     @overload
-    def __new__(cls, opitch: PitchLike = OPitch.C, octave: int = 0) -> Self: ...
+    def __new__(cls, opitch: PitchBase = OPitch.C, octave: int = 0) -> Self: ...
 
-    def __new__(cls, arg1: int | PitchLike, arg2: float | int | None = None) -> Self:
+    def __new__(cls, arg1: int | PitchBase, arg2: float | int | None = None) -> Self:
         if isinstance(arg1, str):
             return _parsePitch(arg1)
         if isinstance(arg1, Pitch):
@@ -725,7 +740,7 @@ class Pitch(PitchLike):
     def hz(self, A0: float = 440) -> float:
         return A0 * np.power(2, (self.tone - 9) / 12)
 
-    def __add__(self, other: PitchLike) -> Self:
+    def __add__(self, other: PitchBase) -> Self:
         deg = self.deg + other.deg
         tone = self.tone + other.tone
         octave, odeg = divmod(deg, 7)
@@ -754,7 +769,7 @@ class Pitch(PitchLike):
 
     def __str__(self):
         return (
-            f"{NOTE_NAMES[self.opitch.deg]}{_accidentalToStr(self.acci)}_{self.octave}"
+            f"{DEG_NAMES[self.opitch.deg]}{_accidentalToStr(self.acci)}_{self.octave}"
         )
 
     def __repr__(self):
@@ -909,6 +924,10 @@ class Mode(Sequence[OPitch], Set[OPitch]):
         return reversed(self._pitches)
 
     @property
+    def pitches(self) -> Sequence[OPitch]:
+        return self._pitches
+
+    @property
     def cyc(self) -> _ModeCyclicAccessor:
         """Cyclic slicing and access support."""
         if not hasattr(self, "_cyc"):
@@ -964,7 +983,7 @@ class Mode(Sequence[OPitch], Set[OPitch]):
     def __contains__(self, value) -> bool:
         # a scale is an ordered sequence
         # so use binary search
-        if not isinstance(value, PitchLike):
+        if not isinstance(value, PitchBase):
             return False
         idx = bisect_left(self._pitches, value)
         if idx >= len(self._pitches):
@@ -1070,7 +1089,7 @@ class Modes:
 class Scale(Sequence[OPitch], Set[OPitch]):
     """A **scale** is a sequence of pitches in a specific mode, starting from a tonic."""
 
-    __slots__ = ("_tonic", "_mode", "_cyc")
+    __slots__ = ("_tonic", "_mode", "_cyc", "_pitches")
 
     def __new__(
         cls, tonic: OPitch | int | str = OPitch.C, mode: Mode = Modes.MAJOR
@@ -1094,6 +1113,13 @@ class Scale(Sequence[OPitch], Set[OPitch]):
     @property
     def mode(self) -> Mode:
         return self._mode
+
+    @property
+    def pitches(self) -> Sequence[OPitch]:
+        if not hasattr(self, "_pitches"):
+            self._pitches = self._mode.pitches + self._tonic
+            self._pitches.flags.writeable = False
+        return self._pitches
 
     @property
     def cyc(self) -> _ScaleCyclicAccessor:

@@ -15,6 +15,7 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
 ]
 keywords = ["music"]
+# dependencies = ["numpy", "scikit-learn", "music21"]
 
 [project.urls]
 Homepage = "https://github.com/vanleefxp/fantazia"
