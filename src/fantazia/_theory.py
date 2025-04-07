@@ -2,16 +2,22 @@ from __future__ import annotations
 
 import itertools as it
 import re
+import typing as t
 from abc import ABCMeta, abstractmethod
 from bisect import bisect_left, bisect_right
 from collections.abc import Callable, Iterable, Iterator, Sequence, Set
 from functools import lru_cache
 from numbers import Integral
-from typing import Self, overload
+from typing import Self, overload, Protocol
 from fractions import Fraction as Q
 
 import numpy as np
 from sortedcontainers import SortedSet
+import pyrsistent as pyr
+from bidict import bidict
+
+if t.TYPE_CHECKING:
+    import music21 as m21
 
 from .utils import Rounding, RoundMode, bisect_round, rounding as _round, classconst
 
@@ -27,6 +33,7 @@ __all__ = [
     "OPitch",
     "Pitch",
     "Mode",
+    "HeptatonicMode",
     "Scale",
     "OInterval",
     "Interval",
@@ -87,17 +94,21 @@ class Qualities:
     Common interval qualities.
     """
 
-    DOUBLY_AUGMENTED = 3
-    AUGMENTED = 2
-    MAJOR = 1
-    PERFECT = 0
-    MINOR = -1
-    DIMINISHED = -2
-    DOUBLY_DIMINISHED = -3
+    DOUBLY_AUGMENTED = AA = 3
+    AUGMENTED = A = 2
+    MAJOR = M = 1
+    PERFECT = P = 0
+    MINOR = m = -1
+    DIMINISHED = d = -2
+    DOUBLY_DIMINISHED = dd = -3
 
 
 DEGS_CO5: Sequence[int] = np.arange(-1, 6) * 4 % 7
-"""major scale degrees in circle of fifths order"""
+"""
+major scale degrees in circle of fifths order
+
+*Value*: `np.array([3, 0, 4, 1, 5, 2, 6])`
+"""
 DEGS_CO5.flags.writeable = False
 
 MAJOR_SCALE_TONES_CO5: Sequence[int] = np.arange(-1, 6) * 7 % 12
@@ -120,7 +131,30 @@ DEG_NAMES_SET = frozenset(DEG_NAMES)
 DEG_NAMES_CO5: Sequence[str] = DEG_NAMES[DEGS_CO5]
 """degree names in circle of fifths order"""
 DEG_NAMES_CO5.flags.writeable = False
+SOFEGE_NAMES: Sequence[str] = np.array(["do", "re", "mi", "fa", "sol", "la", "si"])
+"""solfège names"""
+SOFEGE_NAMES.flags.writeable = False
+SOFEGE_NAMES_SET = frozenset(SOFEGE_NAMES)
+"""solfège names as a set"""
+SOFEGE_NAMES_CO5: Sequence[str] = SOFEGE_NAMES[DEGS_CO5]
+"""solfège names in circle of fifths order"""
+SOFEGE_NAMES_CO5.flags.writeable = False
+_sofegeNamesInvMap = pyr.pmap(
+    {name: i for i, name in enumerate(SOFEGE_NAMES)} | {"ti": 6}
+)
+_intervalQualityMap = bidict(
+    (
+        ("dd", -3),  # doubly diminished
+        ("d", -2),  # diminished
+        ("m", -1),  # minor
+        ("P", 0),  # perfect
+        ("M", 1),  # major
+        ("A", 2),  # augmented
+        ("AA", 3),  # doubly augmented
+    )
+)
 
+_leadingAlphaRe = re.compile(r"^(?:[a-z]+|[1-7])", re.IGNORECASE)
 _trailingOctaveRe = re.compile(r"_[\+\-]?\d+$")
 
 type AcciPref = Callable[[float], int]
@@ -132,7 +166,59 @@ rules can be found in `AcciPrefs`.
 """
 
 
-def _accidentalToStr(acci: float) -> str:
+def _parseAcci(src: str) -> int:
+    if len(src) == 0:  # no accidental (natural)
+        return 0
+    if src[0] == "[":  # numeric accidental value wrapped in []
+        valueSrc = src[1:-1]  # extract content inside the brackets
+        if "/" in valueSrc:  # fractional value
+            return Q(valueSrc)
+        else:  # float value
+            acci = float(valueSrc)
+            if acci % 1 == 0:
+                acci = int(acci)
+            return acci
+    else:
+        acci = 0
+        for ch in src:
+            match ch:
+                case "+":  # "+" for sharp
+                    acci += 1
+                case "-":  # "-" for flat
+                    acci -= 1
+                case _:
+                    raise ValueError(f"Invalid accidental token: {ch}")
+        return acci
+
+
+def _parseDeg(src: str) -> int:
+    if len(src) == 1:  # single letter or number note name
+        if src.isdigit():  # a number from 1 to 7
+            deg = int(src) - 1
+            if deg < 0 or deg >= 7:
+                raise ValueError(f"Invalid degree name: {src}")
+            return deg
+        else:  # a letter note name in CDEFGAB
+            src = src.upper()
+            deg = ord(src) - 67
+            if deg < -2 or deg > 4:
+                raise ValueError(f"Invalid degree name: {src}")
+            if deg < 0:
+                deg += 7
+            return deg
+    else:  # solfege name
+        src = src.lower()
+        try:
+            deg = _sofegeNamesInvMap[src]
+        except KeyError:
+            raise ValueError(f"Invalid degree name: {src}")
+        return deg
+
+
+def _parseIntervalQuality(src: str) -> int: ...  # TODO))
+
+
+def _accidental2Str(acci: float) -> str:
     if acci == 0:
         return ""
     elif acci > 0:
@@ -156,32 +242,15 @@ def _accidentalToStr(acci: float) -> str:
 
 
 def _parseOPitch(src: str) -> OPitch:
-    if len(src) == 0:
-        raise ValueError("Empty pitch string")
-    noteName = src[0].upper()
-    if noteName not in DEG_NAMES_SET:
-        raise ValueError(f"Invalid note name: {noteName}")
-    deg = (ord(noteName) - 67) % 7
-    if len(src) == 1:
-        return OPitch._newHelper(deg, 0)
-    if src[1] == "[":  # accidental value wrapped in []
-        acciSrc = src[2:-1]
-        if "/" in acciSrc:
-            acci = Q(acciSrc)
-        else:
-            acci = float(src[2:-1])
-        if acci % 1 == 0:
-            acci = int(acci)
-    else:
-        acci = 0
-        for ch in src[1:]:
-            match ch:
-                case "+":  # "+" for sharp
-                    acci += 1
-                case "-":  # "-" for flat
-                    acci -= 1
-                case _:
-                    raise ValueError(f"Invalid accidental token: {ch}")
+    # separate degree and accidental
+    degNameMatch: re.Match[str] = _leadingAlphaRe.search(src)
+    if degNameMatch is None:
+        raise ValueError(f"Invalid pitch format: {src}")
+    degName = degNameMatch.group().lower()
+    acciSrc = src[degNameMatch.end() :]
+    deg = _parseDeg(degName)
+    acci = _parseAcci(acciSrc)
+
     return OPitch._newHelper(deg, acci)
 
 
@@ -321,6 +390,10 @@ class AcciPrefs:
     """
 
 
+class SupportsGetItem(Protocol):
+    def __getitem__(self, key: int) -> Self: ...
+
+
 class PitchBase(metaclass=ABCMeta):
     """Base class for `OPitch` and `Pitch`."""
 
@@ -425,7 +498,8 @@ class PitchBase(metaclass=ABCMeta):
         useQuartertone: bool = True,
         rounding: Rounding = Rounding.ROUND,
         roundMode: RoundMode = RoundMode.HALF_EVEN,
-    ):
+        asInterval: bool = False,
+    ) -> m21.pitch.Pitch:
         """Convert to a `music21.pitch.Pitch` object."""
         import music21 as m21
 
@@ -501,7 +575,7 @@ class OPitch(PitchBase):
         ...
 
     @overload
-    def __new__(cls, deg: int | str = 0, acci: float = 0) -> Self:
+    def __new__(cls, deg: int | str = 0, acci: int | float | Q | str = 0) -> Self:
         """
         Creates a new `OPitch` object from degree and accidental values. The degree value can
         be either an integer or a string representing a note name.
@@ -511,25 +585,33 @@ class OPitch(PitchBase):
     @overload
     def __new__(cls, src: PitchBase) -> Self: ...
 
-    def __new__(cls, arg1: int | str | PitchBase = 0, arg2: float = 0) -> Self:
+    def __new__(
+        cls, arg1: int | str | PitchBase = 0, arg2: int | float | Q | str | None = None
+    ) -> Self:
+        if arg2 is None and isinstance(arg1, str):
+            return _parseOPitch(arg1)
         if isinstance(arg1, PitchBase):
-            return arg1.opitch
+            if arg2 is None:
+                return arg1.opitch
+            else:
+                deg = arg1.deg
+                acci = arg1.acci + arg2
+                return cls._newHelper(deg, acci)
+
         if isinstance(arg1, str):
-            if len(arg1) > 1:  # parse as pitch string
-                return _parseOPitch(arg1)
-            else:  # parse as note name
-                if len(arg1) == 0:
-                    raise ValueError("Empty pitch string")
-                if arg1 not in DEG_NAMES_SET:
-                    raise ValueError(f"Invalid note name: {deg}")
-                deg = (ord(arg1.upper()) - 67) % 7
-        elif not isinstance(arg1, Integral):
-            raise TypeError(f"degree must be an integer, got {arg1.__class__.__name__}")
+            deg = _parseDeg(arg1)
         else:
             deg = arg1 % 7
-        acci = arg2
-        if acci % 1 == 0:
-            acci = int(acci)
+
+        if arg2 is None:
+            acci = 0
+        elif isinstance(arg2, str):
+            acci = _parseAcci(arg2)
+        else:
+            acci = arg2
+            if acci % 1 == 0:
+                acci = int(acci)
+
         return cls._newHelper(deg, acci)
 
     @classmethod
@@ -631,7 +713,7 @@ class OPitch(PitchBase):
         return self.__class__(deg, acci)
 
     def __str__(self) -> str:
-        return f"{DEG_NAMES[self.deg]}{_accidentalToStr(self.acci)}"
+        return f"{DEG_NAMES[self.deg]}{_accidental2Str(self.acci)}"
 
     def __repr__(self) -> str:
         return f"{self.__class__.__name__}({str(self)})"
@@ -768,9 +850,7 @@ class Pitch(PitchBase):
         return OPitch(odeg, acci).atOctave(octave)
 
     def __str__(self):
-        return (
-            f"{DEG_NAMES[self.opitch.deg]}{_accidentalToStr(self.acci)}_{self.octave}"
-        )
+        return f"{DEG_NAMES[self.opitch.deg]}{_accidental2Str(self.acci)}_{self.octave}"
 
     def __repr__(self):
         return f"{self.__class__.__name__}({str(self)})"
@@ -847,7 +927,7 @@ def _modeCycSlice(mode: Mode, key: slice) -> tuple[Mode, OPitch]:
     newPitches -= startPitch
     if negStep:
         newPitches[1:] = -newPitches[1:]
-    return Mode._newFromTrustedArray(newPitches), startPitch
+    return _ModeImpl._newFromTrustedArray(newPitches), startPitch
 
 
 def _modeCycMultiIndex(mode: Mode, key: Iterable[int]) -> tuple[Mode, OPitch]:
@@ -859,23 +939,14 @@ def _modeCycMultiIndex(mode: Mode, key: Iterable[int]) -> tuple[Mode, OPitch]:
     newPitches = np.roll(mode._pitches, -start)[key]
     startPitch = newPitches[0]
     newPitches -= startPitch
-    return Mode._newFromTrustedArray(newPitches), startPitch
+    return _ModeImpl._newFromTrustedArray(newPitches), startPitch
 
 
-class Mode(Sequence[OPitch], Set[OPitch]):
+class Mode(Sequence[OPitch], Set[OPitch], metaclass=ABCMeta):
     """
     A **mode** is a sequence of unique octave intervals in ascending order, starting from
     perfect unison.
     """
-
-    __slots__ = ("_pitches", "_cyc")
-
-    @classmethod
-    def _newFromTrustedArray(cls, pitches: np.ndarray[OPitch]) -> Self:
-        self = super().__new__(cls)
-        self._pitches = pitches
-        self._pitches.flags.writeable = False
-        return self
 
     @overload
     def __new__(cls, pitches: Iterable[OPitch | int | str]) -> Self: ...
@@ -889,12 +960,49 @@ class Mode(Sequence[OPitch], Set[OPitch]):
         else:
             pitches = args
         pitches = (p if isinstance(p, OPitch) else OPitch(p) for p in pitches)
-        return cls._newFromTrustedArray(
+        return _ModeImpl._newFromTrustedArray(
             np.array(
                 SortedSet(it.chain((OPitch.C,), pitches)),
                 dtype=object,
             )
         )
+
+    @property
+    @abstractmethod
+    def pitches(self) -> Sequence[OPitch]:
+        raise NotImplementedError
+
+    @property
+    @abstractmethod
+    def cyc() -> SupportsGetItem:
+        """Cyclic slicing and access support."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def diff(self) -> Sequence[OPitch]:
+        """
+        Returns the interval structure of the scale, i.e., the differences between adjacent
+        pitches.
+        """
+        raise NotImplementedError
+
+    def __str__(self) -> str:
+        return f"({', '.join(map(str, self._pitches))})"
+
+    def __repr__(self) -> str:
+        return f"{self.__class__.__name__}{str(self)}"
+
+
+class _ModeImpl(Sequence[OPitch], Set[OPitch]):
+
+    __slots__ = ("_pitches", "_cyc")
+
+    @classmethod
+    def _newFromTrustedArray(cls, pitches: np.ndarray[OPitch]) -> Self:
+        self = super().__new__(cls)
+        self._pitches = pitches
+        self._pitches.flags.writeable = False
+        return self
 
     @overload
     def __getitem__(self, key: int) -> OPitch: ...
@@ -929,16 +1037,11 @@ class Mode(Sequence[OPitch], Set[OPitch]):
 
     @property
     def cyc(self) -> _ModeCyclicAccessor:
-        """Cyclic slicing and access support."""
         if not hasattr(self, "_cyc"):
             self._cyc = _ModeCyclicAccessor(self)
         return self._cyc
 
     def diff(self) -> Sequence[OPitch]:
-        """
-        Returns the interval structure of the scale, i.e., the differences between adjacent
-        pitches.
-        """
         return np.diff(self._pitches, append=OPitch.C)
 
     @overload
@@ -978,7 +1081,7 @@ class Mode(Sequence[OPitch], Set[OPitch]):
             else:
                 newPitches = self._pitches.copy()
                 _modeAlter(newPitches, arg1, arg2)
-        return self.__class__(newPitches)
+        return Mode(newPitches)
 
     def __contains__(self, value) -> bool:
         # a scale is an ordered sequence
@@ -997,22 +1100,22 @@ class Mode(Sequence[OPitch], Set[OPitch]):
             self._pitches == other._pitches
         )
 
-    def __and__(self, other: Self) -> Self:
+    def __and__(self, other: Self) -> Mode:
         newPitches = np.intersect1d(self._pitches, other._pitches)
         return self._newFromTrustedArray(newPitches)
 
-    def __or__(self, other: Self) -> Self:
-        return self.__class__(it.chain(self._pitches[1:], other._pitches[1:]))
+    def __or__(self, other: Self) -> Mode:
+        return Mode(it.chain(self._pitches[1:], other._pitches[1:]))
 
-    def combine(self, other: Self, offset: OPitch = OPitch.C) -> Self:
+    def combine(self, other: Self, offset: OPitch = OPitch.C) -> Mode:
         """
         Combine the current scale with another scale shifted by an interval. The resulting scale
         contains all the pitches of the current scale and the second scale's notes shifted by
         the given interval, repeating notes removed and sorted in ascending order.
         """
-        return self.__class__(it.chain(self._pitches[1:], other._pitches + offset))
+        return Mode(it.chain(self._pitches[1:], other._pitches + offset))
 
-    def stack(self, offset: OPitch = OPitch.C) -> Self:
+    def stack(self, offset: OPitch = OPitch.C) -> Mode:
         """
         Similar to `combine`, but the second scale is the current scale itself.
         """
@@ -1022,14 +1125,14 @@ class Mode(Sequence[OPitch], Set[OPitch]):
         newPitches = _modeInvert(self._pitches)
         return self._newFromTrustedArray(newPitches)
 
-    def __str__(self) -> str:
-        return f"({', '.join(map(str, self._pitches))})"
-
-    def __repr__(self) -> str:
-        return f"{self.__class__.__name__}{str(self)}"
-
     def __hash__(self) -> int:
         return hash(tuple(self._pitches))
+
+
+class HeptatonicMode:
+    """A mode of 7 pitches in which each degree occurs exactly once."""
+
+    ...  # TODO))
 
 
 class _ModeCyclicAccessor:
