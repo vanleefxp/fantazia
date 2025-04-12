@@ -12,11 +12,19 @@ Classifier: License :: OSI Approved :: MIT License
 Requires-Python: >=3.12
 Description-Content-Type: text/markdown
 License-File: LICENSE.txt
+Requires-Dist: bidict>=0.23.1
+Requires-Dist: numpy>=2.2.4
+Requires-Dist: pyrsistent>=0.20.0
+Requires-Dist: scikit-learn>=1.6.1
+Requires-Dist: scipy>=1.15.2
+Requires-Dist: sortedcontainers>=2.4.0
+Provides-Extra: m21
+Requires-Dist: music21>=9.3.0; extra == "m21"
 Dynamic: license-file
 
 # `fantazia`: A Math-Based Music Theory Computation Library
 
-![Python Version from PEP 621 TOML](https://img.shields.io/python/required-version-toml?tomlFilePath=https%3A%2F%2Fraw.githubusercontent.com%2Fvanleefxp%2Ffantazia%2Fmaster%2Fpyproject.toml) ![GitHub License](https://img.shields.io/github/license/vanleefxp/fantazia) [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black) 
+![Python Version from PEP 621 TOML](https://img.shields.io/python/required-version-toml?tomlFilePath=https%3A%2F%2Fraw.githubusercontent.com%2Fvanleefxp%2Ffantazia%2Fmaster%2Fpyproject.toml) ![GitHub License](https://img.shields.io/github/license/vanleefxp/fantazia)
 
 `fantazia` is a lightweight library for *math-based* music theory computation. The package is currently under development and not yet distributed to PyPI. The package name comes from "fantasia" and the preferred abbreviation is `fz`.
 

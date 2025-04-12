@@ -1,0 +1,9 @@
+bidict>=0.23.1
+numpy>=2.2.4
+pyrsistent>=0.20.0
+scikit-learn>=1.6.1
+scipy>=1.15.2
+sortedcontainers>=2.4.0
+
+[m21]
+music21>=9.3.0
