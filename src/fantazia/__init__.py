@@ -6,4 +6,4 @@ types from here, such as pitch / interval and mode.
 """
 
 from ._theory import *
-from . import xen
+from . import xen  # noqa: F401
