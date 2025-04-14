@@ -30,6 +30,78 @@ class RoundMode(StrEnum):
     HALF_UP = "half-up"
     HALF_EVEN = "half-even"
     HALF_DOWN = "half-down"
+    HALF_ZERO = "half-zero"
+    HALF_INF = "half-inf"
+
+
+class RMode(StrEnum):
+    FLOOR = F = "f"
+    """Round towards negative infinity."""
+
+    CEIL = C = "c"
+    """Round towards positive infinity."""
+
+    UP = U = "u"
+    """Round away from zero."""
+
+    DOWN = D = "d"
+    """Round towards zero."""
+
+    EVEN = E = "e"
+    """Round to the nearest even integer."""
+
+    ODD = O = "o"  # noqa: E741
+    """Round to the nearest odd integer."""
+
+
+def rdivmod(
+    n: float, d: float = 1, /, round: bool = True, rmode: RMode = RMode.E
+) -> tuple[int, float]:
+    """
+    Rounded division of n by d. Returns the quotient and remainder.
+    """
+    rmode = RMode(rmode)
+    q, r = divmod(n, d)
+    q = int(q)
+    if r == 0:
+        return (q, 0)
+    if not round or r * 2 == d:
+        match rmode:
+            case RMode.FLOOR:
+                pass
+            case RMode.CEIL:
+                q += 1
+                r -= d
+            case RMode.UP:
+                if q >= 0:
+                    q += 1
+                    r -= d
+            case RMode.DOWN:
+                if q < 0:
+                    q += 1
+                    r -= d
+            case RMode.EVEN:
+                if q % 2 == 1:
+                    q += 1
+                    r -= d
+            case RMode.ODD:
+                if q % 2 == 0:
+                    q += 1
+                    r -= d
+            case _:
+                raise ValueError(f"Invalid round mode: {rmode}")
+    elif r * 2 > d:
+        q += 1
+        r -= d
+    return (q, r)
+
+
+def rdiv(n: float, d: float = 1, **kwargs) -> int:
+    return rdivmod(n, d, **kwargs)[0]
+
+
+def rmod(n: float, d: float = 1, **kwargs) -> float:
+    return rdivmod(n, d, **kwargs)[1]
 
 
 def rounding(
@@ -37,13 +109,14 @@ def rounding(
     step: float = 1,
     rounding: Rounding = Rounding.ROUND,
     roundMode: RoundMode = RoundMode.HALF_EVEN,
-) -> tuple[float, float]:
+    withRem: bool = False,
+) -> float | tuple[float, float]:
     q, r = divmod(x, step)
     if r == 0:
         return x, 0
     match rounding:
         case Rounding.FLOOR:
-            return q * step, r
+            return (q * step, r) if withRem else q * step
         case Rounding.CEIL:
             return (q + 1) * step, r - step
         case Rounding.ROUND:

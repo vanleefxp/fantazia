@@ -8,7 +8,7 @@ from bisect import bisect_left, bisect_right
 from collections.abc import Callable, Iterable, Iterator, Sequence, Set
 from functools import lru_cache
 from numbers import Integral, Real
-from typing import Self, overload, Protocol, Any
+from typing import Self, overload, Protocol, Any, Never
 from fractions import Fraction as Q
 
 import numpy as np
@@ -19,7 +19,7 @@ from bidict import bidict
 if t.TYPE_CHECKING:
     import music21 as m21
 
-from .utils import Rounding, RoundMode, bisect_round, rounding as _round, classconst
+from .utils import RoundMode, bisect_round, classconst, RMode, rdivmod
 
 __all__ = [
     "AcciPref",
@@ -77,7 +77,7 @@ MAJOR_SCALE_TONES.flags.writeable = False
 MAJOR_SCALE_TONES_SET = frozenset(MAJOR_SCALE_TONES)
 """major scale tones as a set"""
 
-PERFECT_INTERVAL_DEGS = frozenset((0, 3, 4))
+PERFECT_INTERVAL_STEPS = frozenset((0, 3, 4))
 STEP_NAMES: Sequence[str] = np.roll(np.array([chr(65 + i) for i in range(7)]), -2)
 """step names from C to B"""
 STEP_NAMES.flags.writeable = False
@@ -99,13 +99,13 @@ _sofegeNamesInvMap = pyr.pmap(
 )
 _intervalQualityMap = bidict(
     (
-        ("dd", -3),  # doubly diminished
+        # ("dd", -3),  # doubly diminished
         ("d", -2),  # diminished
         ("m", -1),  # minor
         ("P", 0),  # perfect
         ("M", 1),  # major
         ("A", 2),  # augmented
-        ("AA", 3),  # doubly augmented
+        # ("AA", 3),  # doubly augmented
     )
 )
 
@@ -190,7 +190,7 @@ def _parseIntervalQuality(src: str) -> int:
     return quality
 
 
-def _acci2Str(acci: float) -> str:
+def _acci2Str(acci: Real) -> str:
     if acci == 0:
         return ""
     elif acci > 0:
@@ -226,6 +226,67 @@ def _parseStepAndAcci(src: str) -> OPitch:
     return step, acci
 
 
+def _prefectQual(acci: Real) -> Real:
+    """Mapping from accidental to interval quality for "perfect" intervals."""
+    if acci >= 1:
+        return acci + 1
+    elif acci >= -1:
+        return 2 * acci
+    else:
+        return acci - 1
+
+
+def _majorQual(acci: Real) -> Real:
+    """Mapping from accidental to interval quality for "major" intervals."""
+    if acci >= 0:
+        return acci + 1
+    elif acci >= -1:
+        return 2 * acci + 1
+    else:
+        return acci
+
+
+def _prefectQualInv(qual: Real) -> Real:
+    if qual >= 2:
+        return qual - 1
+    elif qual >= -2:
+        return qual / 2
+    else:
+        return qual + 1
+
+
+def _majorQualInv(qual: Real) -> Real:
+    if qual >= 1:
+        return qual - 1
+    elif qual >= -1:
+        return (qual - 1) / 2
+    else:
+        return qual
+
+
+def _qual2StrInt(qual: int) -> str:
+    """Interval quality to string, but for integers only."""
+    if qual > 4:
+        return f"[A*{qual - 1}]"
+    elif qual > 1:
+        return "A" * (qual - 1)
+    elif qual < -4:
+        return f"[d*{-qual - 1}]"
+    elif qual < -1:
+        return "d" * (-qual - 1)
+    else:
+        return _intervalQualityMap.inv[qual]
+
+
+def _qual2Str(qual: Real) -> str:
+    """Interval quality to string."""
+    q, r = rdivmod(qual, 1, rmode="d")
+    if r == 0:
+        return _qual2StrInt(q)
+    else:
+        return f"{_qual2StrInt(q)}[{round(r, 3):+}]"
+
+
 class AcciPrefs:
     """See `AcciPref` for details."""
 
@@ -237,15 +298,15 @@ class AcciPrefs:
 
         Examples:
 
-        | input | output | preferred name
-        |:-:|:-:|:-|
-        | `1` | `0` | C sharp |
-        | `3` | `1` | D sharp |
-        | `5.5` | `3` | F quarter-tone-sharp |
-        | `6` | `3` | F sharp |
-        | `6.5` | `3` | F 3-quarter-tones-sharp |
-        | `8` | `4` | G sharp |
-        | `10` | `5` | A sharp |
+        | input | output | preferred name |
+        |:-|:-|:-|
+        | `1` | `0` | `C+` | C sharp |
+        | `3` | `1` | `D+` | D sharp |
+        | `Q("11/2")` | `3` | `F[+1/2]` | F quarter-tone-sharp |
+        | `6` | `3` | `F+` | F sharp |
+        | `Q("13/2")` | `3` | `F[+3/2]` | F 3-quarter-tones-sharp |
+        | `8` | `4` | `G+` | G sharp |
+        | `10` | `5` | `A+` | A sharp |
         """
         return bisect_right(MAJOR_SCALE_TONES, tone) - 1
 
@@ -257,15 +318,15 @@ class AcciPrefs:
 
         Examples:
 
-        | input | output | preferred name
-        |:-:|:-:|:-|
-        | `1` | `1` | D flat |
-        | `3` | `2` | E flat |
-        | `5.5` | `4` | G 3-quarter-tones-flat |
-        | `6` | `4` | G flat |
-        | `6.5` | `4` | G quarter-tone-flat |
-        | `8` | `5` | A flat |
-        | `10` | `6` | B flat |
+        | input | output | preferred name |
+        |:-|:-|:-|
+        | `1` | `1` | `D-` | D flat |
+        | `3` | `2` | `E-` | E flat |
+        | `Q("11/2")` | `4` | `G[-3/2]` | G 3-quarter-tones-flat |
+        | `6` | `4` | `G-` | G flat |
+        | `Q("13/2")` | `4` | `G[-1/2]` | G quarter-tone-flat |
+        | `8` | `5` | `A-` | A flat |
+        | `10` | `6` | `B-` | B flat |
         """
         return bisect_left(MAJOR_SCALE_TONES, tone) - 1
 
@@ -277,13 +338,13 @@ class AcciPrefs:
 
         Examples:
 
-        | input | output | preferred name
+        | input | output | preferred name |
         |:-:|:-:|:-|
         | `1` | `0` | C sharp |
         | `3` | `1` | D sharp |
-        | `5.5` | `3` | F quarter-tone-sharp |
+        | `Q("11/2")` | `3` | F quarter-tone-sharp |
         | `6` | `3` | F sharp |
-        | `6.5` | `4` | G quarter-tone-flat |
+        | `Q("13/2")` | `4` | G quarter-tone-flat |
         | `8` | `4` | G sharp |
         | `10` | `5` | A sharp |
         """
@@ -301,13 +362,13 @@ class AcciPrefs:
 
         | input | output | preferred name |
         |:-:|:-:|:-|
-        | `1` | `1` | D flat |
-        | `3` | `2` | E flat |
-        | `5.5` | `3` | F quarter-tone-sharp |
-        | `6` | `4` | G flat |
-        | `6.5` | `4` | G quarter-tone-flat |
-        | `8` | `5` | A flat |
-        | `10` | `6` | B flat |
+        | `1` | `1` | `D-` | D flat |
+        | `3` | `2` | `E-` | E flat |
+        | `Q("11/2")` | `3` | `F[+1/2]` | F quarter-tone-sharp |
+        | `6` | `4` | `G-` | G flat |
+        | `Q("13/2")` | `4` | `G[-1/2]` | G quarter-tone-flat |
+        | `8` | `5` | `A-` | A flat |
+        | `10` | `6` | `B-` | B flat |
         """
         if tone >= 11.5:
             return 7
@@ -316,20 +377,20 @@ class AcciPrefs:
     @staticmethod
     def CLOSEST_FLAT_F_SHARP(tone: float) -> int:
         """
-        Same as `CLOSEST_FLAT`, but for the tritone (`tone == 6`) case, use the F sharp instead of
-        G flat.
+        Same as `CLOSEST_FLAT`, but for the tritone (`tone == 6`) case, use the F sharp instead
+        of G flat. This is the default accidental preference rule for `OPitch.fromTone()`.
 
         Examples:
 
         | input | output | preferred name |
-        |:-:|:-:|:-|
-        | `1` | `1` | D flat |
-        | `3` | `2` | E flat |
-        | `5.5` | `3` | F quarter-tone-sharp |
-        | `6` | `3` | F sharp |
-        | `6.5` | `4` | G quarter-tone-flat |
-        | `8` | `5` | A flat |
-        | `10` | `6` | B flat |
+        |:-|:-|:-|
+        | `1` | `1` | `D-` | D flat |
+        | `3` | `2` | `E-` | E flat |
+        | `Q("11/2")` | `3` | `F[+1/2]` | F quarter-tone-sharp |
+        | `6` | `3` | `F+` | F sharp |
+        | `Q("13/2")` | `4` | `G[-1/2]` | G quarter-tone-flat |
+        | `8` | `5` | `A-` | A flat |
+        | `10` | `6` | `B-` | B flat |
         """
         if tone >= 11.5:
             return 7
@@ -339,7 +400,7 @@ class AcciPrefs:
         else:
             return step
 
-    def __init__(self):
+    def __init__(self) -> Never:
         raise TypeError("This class is not intended to be instantiated")
 
 
@@ -674,11 +735,11 @@ class PitchBase(DegBase):
         return int(self.tone // 12)
 
     @property
-    def quality(self) -> float:
+    def qual(self) -> float:
         """
         Interval quality when regarding the pitch as an interval.
         """
-        return self.opitch.quality
+        return self.opitch.qual
 
     @property
     def freq(self) -> float:
@@ -687,22 +748,38 @@ class PitchBase(DegBase):
         """
         return np.pow(2, self.tone / 12)
 
+    def interval(self, **kwargs) -> str:
+        "String representation of the pitch as an interval."
+        return f"{_qual2Str(self.qual)}{self.step + 1}"
+
     @abstractmethod
-    def withAcci(self, acci: float = 0) -> Self:
+    def withAcci(self, acci: Real = 0) -> Self:
         """
         Returns a new instance of the same class with the given accidental.
         """
         raise NotImplementedError
 
-    def alter(self, acci: float = 0) -> Self:
+    def alter(self, acci: Real = 0) -> Self:
+        """Alter the accidental of the pitch by the given amount."""
         return self.withAcci(self.acci + acci)
 
     @abstractmethod
     def atOctave(self, octave: int = 0) -> Pitch:
+        """
+        Place the current pitch at the given octave.
+
+        **Note**: Here octave is the actual octave, not the nominal octave. To place a pitch `p`
+        at a nominal octave `o`, call `fz.Pitch(p, o)` instead.
+        """
         raise NotImplementedError
 
     def isEnharmonic(self, other: Self) -> bool:
         return self.tone == other.tone
+
+    @abstractmethod
+    def respell(self, stepAlt: int) -> Self:
+        """Constructs an enharmonic of the current pitch with the given step alteration."""
+        raise NotImplementedError
 
     @abstractmethod
     def __add__(self, other: Self) -> Self:
@@ -729,11 +806,15 @@ class PitchBase(DegBase):
         self,
         useNatural: bool = False,
         useQuartertone: bool = True,
-        rounding: Rounding = Rounding.ROUND,
-        roundMode: RoundMode = RoundMode.HALF_EVEN,
+        round: bool = True,
+        rmode: RMode = RMode.E,
         asInterval: bool = False,
     ) -> m21.pitch.Pitch:
-        """Convert to a `music21.pitch.Pitch` object."""
+        """
+        Convert to a `music21.pitch.Pitch` or `music21.interval.Interval` object.
+
+        **Note**: `music21` must be installed first for this method to work.
+        """
         try:
             import music21 as m21
         except ImportError:
@@ -741,10 +822,9 @@ class PitchBase(DegBase):
 
         m21_step = STEP_NAMES[self.step % 7]
         m21_acci = self.acci
-        m21_acci, m21_microtone = _round(
-            m21_acci, 0.5 if useQuartertone else 1, rounding, roundMode
-        )
-        m21_microtone *= 100
+        d = 0.5 if useQuartertone else 1
+        q, r = rdivmod(m21_acci, d, round=round, rmode=rmode)
+        m21_acci, m21_microtone = q * d, r * 100
         if not useNatural and m21_acci == 0:
             m21_acci = None
 
@@ -754,6 +834,8 @@ class PitchBase(DegBase):
             microtone=m21_microtone,
             octave=self.o + 4 if isinstance(self, Pitch) else None,
         )
+
+        # TODO)) Support for asInterval
 
 
 class OPitch(PitchBase, Deg):
@@ -891,19 +973,11 @@ class OPitch(PitchBase, Deg):
         return MAJOR_SCALE_TONES[self.step] + self.acci
 
     @property
-    def quality(self) -> float:
-        if self.acci > 0:
-            return self.acci + 1
-        elif self.step in PERFECT_INTERVAL_DEGS:
-            if self.acci == 0:
-                return 0
-            else:
-                return self.acci - 1
+    def qual(self) -> float:
+        if self.step in PERFECT_INTERVAL_STEPS:
+            return _prefectQual(self.acci)
         else:
-            if self.acci == 0:
-                return 1
-            else:
-                return self.acci
+            return _majorQual(self.acci)
 
     def atOctave(self, octave: int = 0) -> Pitch:
         return Pitch._newHelper(self, octave - self.tone // 12)
@@ -1029,6 +1103,7 @@ class Pitch(PitchBase):
 
     @classmethod
     def _newImpl(cls, opitch: OPitch, octave: int) -> Self:
+        """The fundamental constructor of `Pitch` class."""
         self = super().__new__(cls)
         self._opitch = opitch
         self._o = octave
@@ -1039,7 +1114,7 @@ class Pitch(PitchBase):
         return self._opitch
 
     @property
-    def otone(self) -> float:
+    def otone(self) -> Real:
         return self.opitch.otone
 
     @property
@@ -1055,11 +1130,11 @@ class Pitch(PitchBase):
         return self.opitch.step + self.o * 7
 
     @property
-    def acci(self) -> float:
+    def acci(self) -> Real:
         return self.opitch.acci
 
     @property
-    def tone(self) -> float:
+    def tone(self) -> Real:
         """
         Chromatic tone of the pitch, in half-steps. Equals to the chromatic tone of octave
         pitch plus nominal octave times 12.
@@ -1067,8 +1142,11 @@ class Pitch(PitchBase):
         return self.opitch.tone + self.o * 12
 
     @property
-    def quality(self) -> float:
-        return self.opitch.quality
+    def qual(self) -> Real:
+        return self.opitch.qual
+
+    def interval(self, compound: bool = False, **kwargs):
+        return super().interval()  # TODO)) handle negative intervals
 
     def withAcci(self, acci: float = 0) -> Self:
         return self._newHelper(self.opitch.withAcci(acci), self.o)
@@ -1076,24 +1154,35 @@ class Pitch(PitchBase):
     def atOctave(self, octave: int = 0) -> Self:
         return self.opitch.atOctave(octave)
 
-    def hz(self, ref: float = 440) -> float:
-        return ref * np.power(2, (self.tone - 9) / 12)
+    def respell(self, stepAlt: int) -> Self:
+        if stepAlt == 0:
+            return self
+        step = self.step + stepAlt
+        octave, ostep = divmod(step, 7)
+        acci = self.tone - MAJOR_SCALE_TONES[ostep] - octave * 12
+        return self._newHelper(OPitch._newHelper(ostep, acci), octave)
+
+    def hz(self, middleA: float = 440) -> float:
+        """
+        Returns the frequency of the pitch in hertz.
+        """
+        return middleA * np.power(2, (self.tone - 9) / 12)
 
     def __add__(self, other: PitchBase) -> Self:
         step = self.step + other.step
         tone = self.tone + other.tone
         octave, ostep = divmod(step, 7)
         acci = tone - MAJOR_SCALE_TONES[ostep] - octave * 12
-        return OPitch(ostep, acci).atOctave(octave)
+        return self._newHelper(OPitch._newHelper(ostep, acci), octave)
 
     def __neg__(self) -> Self:
         if self.opitch.step == 0:
-            return (-self.opitch).atOctave(-self.o)
-        return (-self.opitch).atOctave(-self.o - 1)
+            return self._newHelper(-self.opitch, -self.o)
+        return self._newHelper(-self.opitch, -self.o - 1)
 
     def __mul__(self, other: int) -> Self:
         if other == 0:
-            return self.__class__()
+            return self.C0
         if other == 1:
             return self
         if not isinstance(other, Integral):
@@ -1104,7 +1193,7 @@ class Pitch(PitchBase):
         tone = self.tone * other
         octave, ostep = divmod(step, 7)
         acci = tone - MAJOR_SCALE_TONES[ostep] - octave * 12
-        return OPitch(ostep, acci).atOctave(octave)
+        return self._newHelper(OPitch._newHelper(ostep, acci), octave)
 
     def __str__(self):
         return f"{STEP_NAMES[self.opitch.step]}{_acci2Str(self.acci)}_{self.o}"
@@ -1437,6 +1526,14 @@ class Scale(Sequence[OPitch], Set[OPitch]):
 
     __slots__ = ("_tonic", "_mode", "_cyc", "_pitches")
 
+    if t.TYPE_CHECKING:
+
+        @overload
+        def __getitem__(self, key: int) -> OPitch: ...
+
+        @overload
+        def __getitem__(self, key: slice | Iterable[int]) -> Self: ...
+
     def __new__(
         cls, tonic: OPitch | int | str = OPitch.C, mode: Mode = Modes.MAJOR
     ) -> Self:
@@ -1503,12 +1600,6 @@ class Scale(Sequence[OPitch], Set[OPitch]):
     def __neg__(self) -> Self:
         return self.__class__(self.tonic, -self.mode)
 
-    @overload
-    def __getitem__(self, key: int) -> OPitch: ...
-
-    @overload
-    def __getitem__(self, key: slice | Iterable[int]) -> Self: ...
-
     def __getitem__(self, key: int | slice | Iterable[int]) -> OPitch | Self:
         if isinstance(key, slice):
             newMode, startPitch = self.mode._slice(key)
@@ -1538,6 +1629,14 @@ class _ScaleCyclicAccessor:
 
     __slots__ = ("_parent",)
 
+    if t.TYPE_CHECKING:
+
+        @overload
+        def __getitem__(self, key: int) -> OPitch: ...
+
+        @overload
+        def __getitem__(self, key: slice | Iterable[int]) -> Scale: ...
+
     def __new__(cls, parent: Scale):
         return cls._newHelper(parent)
 
@@ -1547,12 +1646,6 @@ class _ScaleCyclicAccessor:
         self = super().__new__(cls)
         self._parent = parent
         return self
-
-    @overload
-    def __getitem__(self, key: int) -> OPitch: ...
-
-    @overload
-    def __getitem__(self, key: slice | Iterable[int]) -> Scale: ...
 
     def __getitem__(self, key: int | slice | Iterable[int]) -> OPitch | Scale:
         if isinstance(key, slice):

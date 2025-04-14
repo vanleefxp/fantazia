@@ -161,6 +161,34 @@ class TestOPitch(unittest.TestCase):
         for p, m21p in testData:
             self.assertEqual(p.m21(), m21p)
 
+    def test_interval(self):
+        testData = map(
+            lambda t: (fz.OPitch(t[0]), t[1]),
+            (
+                ("C", "P1"),
+                ("D-", "m2"),
+                ("D", "M2"),
+                ("D+", "A2"),
+                ("E-", "m3"),
+                ("E", "M3"),
+                ("F", "P4"),
+                ("F[-1/2]", "m4"),
+                ("F+", "A4"),
+                ("F[+1/2]", "M4"),
+                ("G-", "d5"),
+                ("G[-1/2]", "m5"),
+                ("G", "P5"),
+                ("G[+1/2]", "M5"),
+                ("A-", "m6"),
+                ("A", "M6"),
+                ("B--", "d7"),
+                ("B-", "m7"),
+                ("B", "M7"),
+            ),
+        )
+        for p, ans in testData:
+            self.assertEqual(p.interval(), ans)
+
 
 if __name__ == "__main__":
     unittest.main()
