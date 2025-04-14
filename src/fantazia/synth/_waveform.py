@@ -7,7 +7,7 @@ import itertools as it
 
 import numpy as np
 from scipy.io import wavfile
-from scipy.integrate import quad
+
 from sklearn.cluster import DBSCAN
 
 from ..utils import approxGCD
@@ -59,6 +59,8 @@ def _fourierCoefByIntegral(fn: Callable[[float], complex], n: int) -> complex:
     The fourier coefficient is defined by the formula:
     $$ \\hat{f}(k) = \\int_{0}^{1} f(t) \\text{e}^{-2 \\pi ikt} \\text{d}t $$
     """
+    from scipy.integrate import quad
+
     return quad(lambda t: fn(t) * np.exp(-1j * TAU * n * t), 0, 1, complex_func=True)[0]
 
 

@@ -1,6 +1,6 @@
 from abc import ABCMeta, abstractmethod
 from numbers import Real, Rational
-from typing import overload, Self
+from typing import Self
 from functools import lru_cache
 from fractions import Fraction as Q
 
@@ -68,9 +68,9 @@ class EDO(TuningSystem):
 
     def tone(self, pitch: PitchBase) -> float:
         if isinstance(pitch, OPitch):
-            deg, acci = pitch.deg, pitch.acci
+            deg, acci = pitch.step, pitch.acci
         elif isinstance(pitch, Pitch):
-            deg, acci = pitch.opitch.deg, pitch.acci
+            deg, acci = pitch.opitch.step, pitch.acci
         octave = pitch.tone // 12
         if (rem := acci % 1) == 0:
             order = co5Order(deg, acci)
@@ -101,24 +101,10 @@ class Pythagorean(TuningSystem):
 
     def freq(self, pitch: PitchBase) -> Rational:
         octave = pitch.tone // 12
-        order = co5Order(pitch.deg, pitch.acci)
+        order = co5Order(pitch.step, pitch.acci)
         numer = 3**order
         denom = 1 << (np.floor(order * LOG_2_3) - octave)
         return Q(numer, denom)
 
     def __call__(self, pitch: PitchBase) -> float:
         return np.log2(float(self.freq(pitch)))
-
-
-# class Meantone(TuningSystem):
-
-#     __slots__ = ()
-#     _instance = None
-
-#     def __new__(cls) -> Self:
-#         if cls._instance is None:
-#             cls._instance = super().__new__(cls)
-#         return cls._instance
-
-#     def __call__(self, pitch: PitchLike) -> float:
-#         return np.log2(float(self.freq(pitch)))

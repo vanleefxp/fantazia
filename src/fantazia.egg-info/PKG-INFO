@@ -3,12 +3,12 @@ Name: fantazia
 Version: 0.0.1
 Summary: A package for math-based music theory computation.
 Author-email: "F. X. P." <vanleefxp@gmail.com>
+License-Expression: MIT
 Project-URL: Homepage, https://github.com/vanleefxp/fantazia
 Project-URL: Issues, https://github.com/vanleefxp/fantazia/issues
-Keywords: music
+Keywords: music,music theory,notation
 Classifier: Programming Language :: Python :: 3
 Classifier: Operating System :: OS Independent
-Classifier: License :: OSI Approved :: MIT License
 Requires-Python: >=3.12
 Description-Content-Type: text/markdown
 License-File: LICENSE.txt

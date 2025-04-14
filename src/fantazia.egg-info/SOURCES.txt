@@ -14,3 +14,4 @@ src/fantazia/synth/_waveform.py
 src/fantazia/utils/__init__.py
 src/fantazia/xen/__init__.py
 src/fantazia/xen/_xen.py
+tests/test_opitch.py
