@@ -19,16 +19,22 @@ from bidict import bidict
 if t.TYPE_CHECKING:
     import music21 as m21
 
-from .utils import RoundMode, bisect_round, classconst, RMode, rdivmod
+from .utils.cls import classconst
+from .utils.number import rdivmod, rbisect, RMode, resolveInt
+
+# TODO)) put utils in a separate library
 
 __all__ = [
+    "ostep",
+    "step",
+    "acci",
+    "qual",
     "AcciPref",
     "DegMaps",
-    "Qualities",
     "AcciPrefs",
     "Modes",
     "DegBase",
-    "Deg",
+    "ODeg",
     "DegMap",
     "PitchBase",
     "OPitch",
@@ -43,19 +49,7 @@ __all__ = [
     "STEP_NAMES_SET",
 ]
 
-
-class Qualities:
-    """
-    Common interval qualities.
-    """
-
-    DOUBLY_AUGMENTED = AA = 3
-    AUGMENTED = A = 2
-    MAJOR = M = 1
-    PERFECT = P = 0
-    MINOR = m = -1
-    DIMINISHED = d = -2
-    DOUBLY_DIMINISHED = dd = -3
+_MISSING = object()
 
 
 STEPS_CO5: Sequence[int] = np.arange(-1, 6) * 4 % 7
@@ -99,24 +93,22 @@ _sofegeNamesInvMap = pyr.pmap(
 )
 _intervalQualityMap = bidict(
     (
-        # ("dd", -3),  # doubly diminished
         ("d", -2),  # diminished
         ("m", -1),  # minor
         ("P", 0),  # perfect
         ("M", 1),  # major
         ("A", 2),  # augmented
-        # ("AA", 3),  # doubly augmented
     )
 )
 
 _leadingAlphaRe = re.compile(r"^(?:[a-z]+|[1-7])", re.IGNORECASE)
-_trailingOctaveRe = re.compile(r"_[\+\-]?\d+$")
+_trailingDigitsRe = re.compile(r"\d+$")
 _multipleAugRe = re.compile(r"^A+")
 _multipleAugNumRe = re.compile(r"^\[A\*(\d+)\]")
 _multipleDimRe = re.compile(r"^d+")
 _multipleDimNumRe = re.compile(r"^\[d\*(\d+)\]")
 
-type AcciPref = Callable[[float], int]
+type AcciPref = Callable[[Real], int]
 """
 Type alias for a function that takes a tone in half-steps and returns the preferred step for 
 that tone. The accidental can be later computed by taking the difference between the given
@@ -125,18 +117,21 @@ rules can be found in `AcciPrefs`.
 """
 
 
+def _parseMicrotone(src: str) -> Real:
+    if len(src) == 0:
+        return 0
+    valueSrc = src[1:-1]  # extract content inside the brackets
+    if "/" in valueSrc:  # fractional value
+        return resolveInt(Q(valueSrc))
+    else:  # float value
+        return resolveInt(float(valueSrc))
+
+
 def _parseAcci(src: str) -> int:
     if len(src) == 0:  # no accidental (natural)
         return 0
     if src[0] == "[":  # numeric accidental value wrapped in []
-        valueSrc = src[1:-1]  # extract content inside the brackets
-        if "/" in valueSrc:  # fractional value
-            return Q(valueSrc)
-        else:  # float value
-            acci = float(valueSrc)
-            if acci % 1 == 0:
-                acci = int(acci)
-            return acci
+        return _parseMicrotone(src)
     else:
         acci = 0
         for ch in src:
@@ -150,7 +145,7 @@ def _parseAcci(src: str) -> int:
         return acci
 
 
-def _parseStep(src: str) -> int:
+def _parseOStep(src: str) -> int:
     if len(src) == 1:  # single letter or number note name
         if src.isdigit():  # a number from 1 to 7
             step = int(src) - 1
@@ -173,7 +168,18 @@ def _parseStep(src: str) -> int:
         return step
 
 
-def _parseIntervalQuality(src: str) -> int:
+def _parseStep(src: str) -> int:
+    if not src[-1].isdigit():
+        # octave not specified, assume octave 0
+        return _parseOStep(src)
+    else:
+        ostep, octave = src.rsplit("_", 1)
+        ostep = _parseOStep(ostep)
+        octave = int(octave)
+        return ostep + 7 * octave
+
+
+def _parseQualBase(src: str) -> int:
     quality = _intervalQualityMap.get(src)
     if quality is None:
         if _multipleAugRe.match(src):
@@ -190,11 +196,50 @@ def _parseIntervalQuality(src: str) -> int:
     return quality
 
 
+def _parseQual(src: str) -> Real:
+    if src[0] == "[":
+        end = src.find("]")
+        if end < 0:
+            raise ValueError(f"Invalid interval quality: {src}")
+        end += 1
+        qualitySrc = src[:end]
+        microtoneSuffix = src[end:]
+    else:
+        start = src.find("[")
+        if start < 0:
+            qualitySrc = src
+            microtoneSuffix = ""
+        else:
+            qualitySrc = src[:start]
+            microtoneSuffix = src[start:]
+
+    qualBase = _parseQualBase(qualitySrc)
+    microtone = _parseMicrotone(microtoneSuffix)
+    return qualBase + microtone
+
+
+def _parseInterval(src: str) -> tuple[int, Real, bool]:
+    neg = False
+    if src[0] == "-":
+        neg = True
+        src = src[1:]
+    elif src[0] == "+":
+        src = src[1:]
+    trailingNumMatch: re.Match[str] = _trailingDigitsRe.search(src)
+    if trailingNumMatch is None:
+        raise ValueError(f"Invalid interval format: {src}")
+    end = trailingNumMatch.start()
+    qual = _parseQual(src[:end])
+    step = int(src[end:]) - 1
+    acci = _qualInvMap(step, qual)
+    return step, acci, neg
+
+
 def _acci2Str(acci: Real) -> str:
     if acci == 0:
         return ""
     elif acci > 0:
-        if acci % 1 == 0:
+        if acci.is_integer():
             acci = int(acci)
             if acci <= 3:
                 return "+" * acci
@@ -203,7 +248,7 @@ def _acci2Str(acci: Real) -> str:
         else:
             return f"[{round(acci, 3):+}]"
     else:
-        if acci % 1 == 0:
+        if acci.is_integer():
             acci = int(acci)
             if acci >= -3:
                 return "-" * abs(acci)
@@ -213,20 +258,20 @@ def _acci2Str(acci: Real) -> str:
             return f"[{round(acci, 3):+}]"
 
 
-def _parseStepAndAcci(src: str) -> OPitch:
+def _parseOPitch(src: str) -> tuple[int, Real]:
     # separate step and accidental
     stepNameMatch: re.Match[str] = _leadingAlphaRe.search(src)
     if stepNameMatch is None:
         raise ValueError(f"Invalid pitch format: {src}")
     stepName = stepNameMatch.group().lower()
     acciSrc = src[stepNameMatch.end() :]
-    step = _parseStep(stepName)
+    step = _parseOStep(stepName)
     acci = _parseAcci(acciSrc)
 
     return step, acci
 
 
-def _prefectQual(acci: Real) -> Real:
+def _prefectQualMap(acci: Real) -> Real:
     """Mapping from accidental to interval quality for "perfect" intervals."""
     if acci >= 1:
         return acci + 1
@@ -236,7 +281,7 @@ def _prefectQual(acci: Real) -> Real:
         return acci - 1
 
 
-def _majorQual(acci: Real) -> Real:
+def _majorQualMap(acci: Real) -> Real:
     """Mapping from accidental to interval quality for "major" intervals."""
     if acci >= 0:
         return acci + 1
@@ -246,25 +291,41 @@ def _majorQual(acci: Real) -> Real:
         return acci
 
 
-def _prefectQualInv(qual: Real) -> Real:
+def _qualMap(step: int, acci: Real) -> Real:
+    if step in PERFECT_INTERVAL_STEPS:
+        return _prefectQualMap(acci)
+    else:
+        return _majorQualMap(acci)
+
+
+def _prefectQualInvMap(qual: Real) -> Real:
+    """Mapping from interval quality to accidental for "perfect" intervals."""
     if qual >= 2:
         return qual - 1
     elif qual >= -2:
-        return qual / 2
+        return resolveInt(qual / 2)
     else:
         return qual + 1
 
 
-def _majorQualInv(qual: Real) -> Real:
+def _majorQualInvMap(qual: Real) -> Real:
+    """Mapping from interval quality to accidental for "major" intervals."""
     if qual >= 1:
         return qual - 1
     elif qual >= -1:
-        return (qual - 1) / 2
+        return resolveInt((qual - 1) / 2)
     else:
         return qual
 
 
-def _qual2StrInt(qual: int) -> str:
+def _qualInvMap(step: int, qual: Real) -> Real:
+    if step in PERFECT_INTERVAL_STEPS:
+        return _prefectQualInvMap(qual)
+    else:
+        return _majorQualInvMap(qual)
+
+
+def _qual2Str_int(qual: int) -> str:
     """Interval quality to string, but for integers only."""
     if qual > 4:
         return f"[A*{qual - 1}]"
@@ -278,20 +339,64 @@ def _qual2StrInt(qual: int) -> str:
         return _intervalQualityMap.inv[qual]
 
 
-def _qual2Str(qual: Real) -> str:
+def _qual2Str(qual: Real, /, rmode: RMode | str = RMode.D) -> str:
     """Interval quality to string."""
-    q, r = rdivmod(qual, 1, rmode="d")
+    q, r = rdivmod(qual, 1, rmode=rmode)
     if r == 0:
-        return _qual2StrInt(q)
+        return _qual2Str_int(q)
     else:
-        return f"{_qual2StrInt(q)}[{round(r, 3):+}]"
+        return f"{_qual2Str_int(q)}[{round(r, 3):+}]"
+
+
+def ostep(src: int | str) -> int:
+    """Resolves an octave step representation to an integer between 0 and 6."""
+    if isinstance(src, str):
+        return _parseOStep(src)
+    else:
+        return src % 7
+
+
+def step(src: int | str) -> int:
+    """Resolves a step representation in specific octave to an integer."""
+    if isinstance(src, str):
+        return _parseStep(src)
+    else:
+        return src
+
+
+def acci(src: Real | str) -> Real:
+    """Resolves an accidental representation to a semitone value."""
+    if isinstance(src, str):
+        return _parseAcci(src)
+    else:
+        return resolveInt(src)
+
+
+def qual(src: Real | str) -> Real:
+    """Resolves an interval quality representation to a number."""
+    if isinstance(src, str):
+        return _parseQual(src)
+    else:
+        return resolveInt(src)
+
+
+# aliases to avoid name conflict
+_resolveStep = step
+_resolveAcci = acci
+
+
+def _resolveTone(src: PitchBase | Real) -> Real:
+    if isinstance(src, PitchBase):
+        return src.tone
+    else:
+        return resolveInt(src)
 
 
 class AcciPrefs:
     """See `AcciPref` for details."""
 
     @staticmethod
-    def SHARP(tone: float) -> int:
+    def SHARP(tone: Real) -> int:
         """
         Always use the lower step and sharp sign when a tone is not a standard tone in C major
         scale, both for standard 12edo pitches and microtonal pitches.
@@ -311,7 +416,7 @@ class AcciPrefs:
         return bisect_right(MAJOR_SCALE_TONES, tone) - 1
 
     @staticmethod
-    def FLAT(tone: float) -> int:
+    def FLAT(tone: Real) -> int:
         """
         Always use the upper step and flat sign when a tone is not a standard tone in C major
         scale,both for standard 12edo pitches and microtonal pitches.
@@ -328,10 +433,10 @@ class AcciPrefs:
         | `8` | `5` | `A-` | A flat |
         | `10` | `6` | `B-` | B flat |
         """
-        return bisect_left(MAJOR_SCALE_TONES, tone) - 1
+        return bisect_left(MAJOR_SCALE_TONES, tone)
 
     @staticmethod
-    def CLOSEST_SHARP(tone: float) -> int:
+    def CLOSEST_SHARP(tone: Real) -> int:
         """
         For 12edo pitches, use the lower step and sharp sign when the tone is not a standard tone
         in C major scale. For microtonal pitches, choose the closest standard tone in C major scale.
@@ -339,21 +444,21 @@ class AcciPrefs:
         Examples:
 
         | input | output | preferred name |
-        |:-:|:-:|:-|
-        | `1` | `0` | C sharp |
-        | `3` | `1` | D sharp |
-        | `Q("11/2")` | `3` | F quarter-tone-sharp |
-        | `6` | `3` | F sharp |
-        | `Q("13/2")` | `4` | G quarter-tone-flat |
-        | `8` | `4` | G sharp |
-        | `10` | `5` | A sharp |
+        |:-|:-|:-|
+        | `1` | `0` | `C+` | C sharp |
+        | `3` | `1` | `D+` | D sharp |
+        | `Q("11/2")` | `3` | `F[+1/2]` | F quarter-tone-sharp |
+        | `6` | `3` | `F+` | F sharp |
+        | `Q("13/2")` | `4` | `G[-1/2]` | G quarter-tone-flat |
+        | `8` | `4` | `G+` | G sharp |
+        | `10` | `5` | `A+` | A sharp |
         """
         if tone > 11.5:
             return 7
-        return bisect_round(MAJOR_SCALE_TONES, tone, roundingMode=RoundMode.HALF_DOWN)
+        return rbisect(MAJOR_SCALE_TONES, tone, rmode="f")
 
     @staticmethod
-    def CLOSEST_FLAT(tone: float) -> int:
+    def CLOSEST_FLAT(tone: Real) -> int:
         """
         For 12edo pitches, use the upper step and flat sign when the tone is not a standard tone
         in C major scale. For microtonal pitches, choose the closest standard tone in C major scale.
@@ -361,7 +466,7 @@ class AcciPrefs:
         Examples:
 
         | input | output | preferred name |
-        |:-:|:-:|:-|
+        |:-|:-|:-|
         | `1` | `1` | `D-` | D flat |
         | `3` | `2` | `E-` | E flat |
         | `Q("11/2")` | `3` | `F[+1/2]` | F quarter-tone-sharp |
@@ -372,10 +477,10 @@ class AcciPrefs:
         """
         if tone >= 11.5:
             return 7
-        return bisect_round(MAJOR_SCALE_TONES, tone, roundingMode=RoundMode.HALF_UP)
+        return rbisect(MAJOR_SCALE_TONES, tone, rmode="c")
 
     @staticmethod
-    def CLOSEST_FLAT_F_SHARP(tone: float) -> int:
+    def CLOSEST_FLAT_F_SHARP(tone: Real) -> int:
         """
         Same as `CLOSEST_FLAT`, but for the tritone (`tone == 6`) case, use the F sharp instead
         of G flat. This is the default accidental preference rule for `OPitch.fromTone()`.
@@ -394,7 +499,7 @@ class AcciPrefs:
         """
         if tone >= 11.5:
             return 7
-        step = bisect_round(MAJOR_SCALE_TONES, tone, roundingMode=RoundMode.HALF_UP)
+        step = rbisect(MAJOR_SCALE_TONES, tone, rmode="c")
         if tone == 6:
             return 3
         else:
@@ -409,6 +514,8 @@ class SupportsGetItem(Protocol):
 
 
 class DegBase(metaclass=ABCMeta):
+    __slots__ = ()
+
     @property
     @abstractmethod
     def step(self) -> int:
@@ -416,7 +523,7 @@ class DegBase(metaclass=ABCMeta):
 
     @property
     @abstractmethod
-    def acci(self) -> float:
+    def acci(self) -> Real:
         raise NotImplementedError
 
     def __repr__(self):
@@ -426,16 +533,16 @@ class DegBase(metaclass=ABCMeta):
         return f"{self.step + 1}{_acci2Str(self.acci)}"
 
 
-class Deg(DegBase):
+class ODeg(DegBase):
     __slots__ = ("_step", "_acci")
 
     if t.TYPE_CHECKING:
 
         @overload
-        def __new__(cls, src: str): ...
+        def __new__(cls, src: str) -> Self: ...
 
         @overload
-        def __new__(cls, step: int, acci: Real): ...
+        def __new__(cls, step: int | str, acci: Real | str) -> Self: ...
 
     def __new__(cls, arg1: str | int, arg2: Real | str | None = None) -> Self:
         if arg2 is None:
@@ -445,34 +552,32 @@ class Deg(DegBase):
                 step, acci = arg1.step % 7, arg1.acci
                 return cls._newHelper(step, acci)
             elif isinstance(arg1, str):
-                return cls._parseStr(arg1)
+                return cls._parse(arg1)
             arg2 = 0
 
         if isinstance(arg1, str):
-            step = _parseStep(arg1)
+            step = _parseOStep(arg1)
         else:
             step = arg1 % 7
         if isinstance(arg2, str):
             acci = _parseAcci(arg2)
         else:
-            acci = arg2
-            if acci % 1 == 0:
-                acci = int(acci)
+            acci = resolveInt(arg2)
         return cls._newHelper(step, acci)
 
     @classmethod
     @lru_cache
-    def _parseStr(cls, src: str) -> Self:
-        return cls._newHelper(*_parseStepAndAcci(src))
+    def _parse(cls, src: str) -> Self:
+        return cls._newHelper(*_parseOPitch(src))
 
     @classmethod
     @lru_cache
-    def _newHelper(cls, step: int, acci: float) -> Self:
+    def _newHelper(cls, step: int, acci: Real) -> Self:
         # create a new instance with caching
         return cls._newImpl(step, acci)
 
     @classmethod
-    def _newImpl(cls, step: int, acci: float) -> Self:
+    def _newImpl(cls, step: int, acci: Real) -> Self:
         # the implementation of creating a new instance without caching
         self = super(DegBase, cls).__new__(cls)
         self._step = step
@@ -485,9 +590,49 @@ class Deg(DegBase):
         return self._step
 
     @property
-    def acci(self) -> float:
-        """An accidental value in half-steps that modifies the degree."""
+    def acci(self) -> Real:
+        """An accidental value in semitones that modifies the degree."""
         return self._acci
+
+
+class Deg(DegBase):
+    __slots__ = ("_odeg", "_o")
+
+    if t.TYPE_CHECKING:
+
+        @overload
+        def __new__(cls, src: str) -> Self: ...
+
+    def __new__(cls, arg1=_MISSING, arg2=_MISSING, *, o=_MISSING) -> Self: ...
+
+    @classmethod
+    @lru_cache
+    def _newHelper(cls, odeg: ODeg, o: int) -> Self:
+        # create a new instance with caching
+        return cls._newImpl(odeg, o)
+
+    @classmethod
+    def _newImpl(cls, odeg: ODeg, o: int) -> Self:
+        self = super().__new__(cls)
+        self._odeg = odeg
+        self._o = o
+        return self
+
+    @property
+    def odeg(self) -> ODeg:
+        return self._odeg
+
+    @property
+    def o(self) -> int:
+        return self._o
+
+    @property
+    @lru_cache
+    def step(self) -> int:
+        return self.odeg.step + self.o * 7
+
+    def acci(self) -> Real:
+        return self.odeg.acci
 
 
 class DegMap(Sequence[Real]):
@@ -553,14 +698,14 @@ class DegMap(Sequence[Real]):
         return len(self._tones)
 
     def __getitem__(
-        self, key: int | str | Deg | slice | Iterable[int]
+        self, key: int | str | ODeg | slice | Iterable[int]
     ) -> int | Sequence[int]:
         if isinstance(key, tuple):
             key = np.array(key)
         if isinstance(key, Integral):
             return self._tones[key]
         else:
-            key = Deg(key)
+            key = ODeg(key)
             return self._tones[key.deg] + key.acci
 
     def __iter__(self):
@@ -643,19 +788,19 @@ class _DegMapPitchesView(Sequence["OPitch"], Set["OPitch"]):
         return 7
 
     def __iter__(self) -> Iterator["OPitch"]:
-        return map(OPitch.fromStepAndTone, range(7), self._parent._tones)
+        return map(OPitch._fromStepAndTone, range(7), self._parent._tones)
 
     def __contains__(self, value: Any):
         if not isinstance(value, PitchBase):
             return False
         return self._parent._tones[value.step % 7] == value.tone
 
-    def index(self, value: PitchBase) -> Deg:
+    def index(self, value: PitchBase) -> ODeg:
         """Find the degree of pitch in the degree map."""
         value = value.opitch
         step = value.step
         acci = value.tone - self._parent._tones[step]
-        return Deg(step, acci)
+        return ODeg(step, acci)
 
     def __eq__(self, other) -> bool:
         return self._parent == other._parent
@@ -667,12 +812,12 @@ class _DegMapPitchesView(Sequence["OPitch"], Set["OPitch"]):
             return self._multiIndex(key)
         return self._getItem(key)
 
-    def _getItem(self, key: int | str | Deg) -> OPitch:
+    def _getItem(self, key: int | str | ODeg) -> OPitch:
         if isinstance(key, Integral):
-            return OPitch.fromStepAndTone(key, self._parent._tones[key])
-        if not isinstance(key, Deg):
-            key = Deg(key)
-        return OPitch.fromStepAndTone(
+            return OPitch._fromStepAndTone(key, self._parent._tones[key])
+        if not isinstance(key, ODeg):
+            key = ODeg(key)
+        return OPitch._fromStepAndTone(
             key.step, self._parent._tones[key.step] + key.acci
         )
 
@@ -680,15 +825,38 @@ class _DegMapPitchesView(Sequence["OPitch"], Set["OPitch"]):
         steps = np.arange(7)[key]
         tones = self._parent._tones[steps]
         return np.array(
-            [OPitch.fromStepAndTone(s, t) for s, t in zip(steps, tones)], dtype=object
+            [OPitch._fromStepAndTone(s, t) for s, t in zip(steps, tones)], dtype=object
         )
 
-    def _multiIndex(self, key: Iterable[int | str | Deg]) -> Sequence[OPitch]:
+    def _multiIndex(self, key: Iterable[int | str | ODeg]) -> Sequence[OPitch]:
         return np.array([self._getItem(k) for k in key], dtype=object)
 
 
 class PitchBase(DegBase):
     """Base class for `OPitch` and `Pitch`."""
+
+    __slots__ = ()
+
+    @classmethod
+    @abstractmethod
+    def _parsePitch(self, src: str) -> Self:
+        raise NotImplementedError
+
+    @classmethod
+    @abstractmethod
+    def _parseInterval(self, src: str) -> Self:
+        raise NotImplementedError
+
+    @classmethod
+    @lru_cache
+    def _parse(cls, src: str) -> Self:
+        try:  # assume to be a pitch notation
+            return cls._parsePitch(src)
+        except ValueError:
+            try:  # assume to be an interval notation
+                return cls._parseInterval(src)
+            except ValueError:
+                raise ValueError(f"invalid pitch or interval string: {src}")
 
     @property
     @abstractmethod
@@ -699,7 +867,7 @@ class PitchBase(DegBase):
     @property
     @abstractmethod
     def acci(self) -> Real:
-        """Accidental of the pitch, in half-steps."""
+        """An accidental value in semitones that modifies the pitch."""
         raise NotImplementedError
 
     @property
@@ -735,7 +903,7 @@ class PitchBase(DegBase):
         return int(self.tone // 12)
 
     @property
-    def qual(self) -> float:
+    def qual(self) -> Real:
         """
         Interval quality when regarding the pitch as an interval.
         """
@@ -748,9 +916,9 @@ class PitchBase(DegBase):
         """
         return np.pow(2, self.tone / 12)
 
-    def interval(self, **kwargs) -> str:
+    def interval(self, *, rmode: RMode | str = RMode.D, **kwargs) -> str:
         "String representation of the pitch as an interval."
-        return f"{_qual2Str(self.qual)}{self.step + 1}"
+        return f"{_qual2Str(self.qual, rmode=rmode)}{self.step + 1}"
 
     @abstractmethod
     def withAcci(self, acci: Real = 0) -> Self:
@@ -784,6 +952,12 @@ class PitchBase(DegBase):
     @abstractmethod
     def __add__(self, other: Self) -> Self:
         raise NotImplementedError
+
+    def __abs__(self) -> Self:
+        if self.step > 0 or self.step == 0 and self.acci >= 0:
+            return self
+        else:
+            return -self
 
     @abstractmethod
     def __neg__(self) -> Self:
@@ -838,9 +1012,10 @@ class PitchBase(DegBase):
         # TODO)) Support for asInterval
 
 
-class OPitch(PitchBase, Deg):
+class OPitch(PitchBase, ODeg):
     """
-    Represents a pitch in an octave, or equivalently, an interval no greater than an octave.
+    Represents a pitch in an octave, or equivalently, an interval no greater than an octave,
+    which is often referred to as a **pitch / interval class**.
     """
 
     __slots__ = ("_step", "_acci")
@@ -851,110 +1026,192 @@ class OPitch(PitchBase, Deg):
         @overload
         def __new__(cls, src: str) -> Self:
             """
-            Creates a new `OPitch` object from string notation. A valid string notation is a
-            note name followed by optional accidental symbols. Sharps and flats ar represented
-            by `+` and `-` symbols, respectively. `++` and `--` are used for double sharps and
-            double flats. For microtonal notations, the accidental is a float value preceded by
-            `+` of `-` wrapped in brackets.
+            Creates a new `OPitch` object from string notation, in the form of either
+            a pitch notation (e.g. `"C"`, `"F+"`, `"B-"`) or an interval notation (e.g. `"M3"`,
+            `"m6"`, `"P5"`, `"A2"`).
+
+            A formal definition of pitch notation and interval notation is displayed in the
+            [extended BNF](https://en.wikipedia.org/wiki/Extended_Backus%E2%80%93Naur_form)
+            syntax below:
+
+            ```ebnf
+            accepted-input    = opitch-notation | interval-notation;
+
+            opitch-notation   = note-name, acci;
+            note-name         = letter-name | solfege-name | scale-degree;
+            letter-name       = "C" | "D" | "E" | "F" | "G" | "A" | "B" |
+                                ? any case variants of items before ?;
+            solfege-name      = "do" | "re" | "mi" | "fa" | "sol" | "la" | "si" | "ti" |
+                                ? any case variants of items before ?;
+            scale-degree      = "1" | "2" | "3" | "4" | "5" | "6" | "7";
+            acci              = "" | symbolic-acci | numeric-acci
+            non-zero-digit    = "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9";
+            digit             = "0" | non-zero-digit;
+            positive-integer  = non-zero-digit, {digit};
+            natural-number    = "0" | positive-integer;
+            positive-decimal  = [integer], ".", {digit};
+            fraction          = natural-number, "/", positive-integer;
+            sign              = "+" | "-";
+            symbolic-acci     = {sign};
+            numeric-acci      = "[", sign, natural-number | fracion | positive-decimal, "]";
+
+            interval-notation = [sign], quality, natural-number
+            quality           = quality-base, [numeric-acci]
+            quality-base      = ("A", {"A"}) | "M" | "P" | "m" | ("d", {"d"}) | multiple-aug-dim
+            multiple-aug-dim  = ("[", "A" | "d", "*", natural-number, "]")
+            ```
             """
             ...
 
         @overload
-        def __new__(cls, step: int | str = 0, acci: Real | str = 0) -> Self:
+        def __new__(cls, step: int | str, acci: Real | str = 0) -> Self:
             """
             Creates a new `OPitch` object from step and accidental values.
             """
             ...
 
         @overload
-        def __new__(cls, src: PitchBase) -> Self: ...
+        def __new__(cls, deg: DegBase, acci: Real | str = 0) -> Self:
+            """
+            Creates a new `OPitch` object from degree and accidental. If the degree object
+            already has an accidental, it will be added to the given `acci` value.
+
+            If `deg` is of type `PitchBase`, this constructor is equivalent to
+            `deg.opitch.alter(acci)`.
+            """
+            ...
+
+        @overload
+        def __new__(cls, step: int | str, *, tone: Real | PitchBase) -> Self:
+            """
+            Creates a new `OPitch` object from a step and a chromatic tone.
+
+            If `tone` is a `PitchBase` object, this constructor is equivalent to
+            `tone.opitch.respell(ostep(step) - tone.step)`, which constructs an enharmonic of
+            `tone` with the given step.
+            """
+            ...
+
+        @overload
+        def __new__(
+            cls,
+            *,
+            tone: Real | PitchBase,
+            acciPref: AcciPref = AcciPrefs.CLOSEST_FLAT_F_SHARP,
+        ) -> Self:
+            """
+            Creates a new `OPitch` object from a chromatic tone with accidental automatically
+            chosen by accidental preference.
+            """
+            ...
 
     @classconst
     def C(cls) -> Self:
         """
-        The C pitch, with no accidental. This is the identity element of addition in the octave
-        pitch abelian group.
+        The C pitch, with no accidental, which is the identity element of addition in the
+        octave pitch abelian group.
         """
         if cls._C is None:
             cls._C = cls._newHelper(0, 0)
         return cls._C
 
     @classmethod
-    def fromStepAndTone(cls, step: int | str, tone: Real) -> Self:
-        """
-        Creates a pitch from a step and a chromatic tone.
-        """
-        if isinstance(step, str):
-            step = _parseStep(step)
-        if not isinstance(step, Integral):
-            raise TypeError(f"invalid step: {step}")
-        octave, step = divmod(step, 7)
-        acci = tone - MAJOR_SCALE_TONES[step] - octave * 12
-        return cls(step, acci)
-
-    @classmethod
-    def fromTone(
-        cls,
-        tone: Real | PitchBase,
-        acciPref: AcciPref = AcciPrefs.CLOSEST_FLAT_F_SHARP,
-    ) -> Self:
-        if isinstance(tone, PitchBase):
-            tone = tone.tone
-        tone %= 12
-        step = acciPref(tone)
-        octaves, ostep = divmod(step, 7)
-        acci = tone - MAJOR_SCALE_TONES[ostep] - octaves * 12
-        return cls(step, acci)
-
-    @classmethod
     def co5(cls, n: int = 0) -> Self:
         """
         Returns the `n`-th pitch in circle of fifths order, starting from C.
         positive `n` values means `n` perfect fifths up while negative `n` values means `n`
-        perfect fifths down.
+        perfect fifths down. This method is equivalent to `OPitch("P5") * n`.
 
         When `n` ranges from -7 to 7, this method yields the tonic of major scale with `abs(n)`
         sharps (for positive `n`) or flats (for negative `n`).
         """
         step = n * 4 % 7
         acci = (n + 1) // 7
-        return cls(step, acci)
+        return cls._newHelper(step, acci)
 
     def __new__(
-        cls, arg1: int | str | PitchBase = 0, arg2: int | float | Q | str | None = None
+        cls,
+        arg1=_MISSING,
+        arg2=_MISSING,
+        *,
+        tone=_MISSING,
+        acciPref=AcciPrefs.CLOSEST_FLAT_F_SHARP,
     ) -> Self:
-        if arg2 is None and isinstance(arg1, str):
-            return cls._parseStr(arg1)
-        if isinstance(arg1, PitchBase):
-            if arg2 is None:
+        if arg2 is _MISSING:
+            if arg1 is _MISSING:
+                if tone is _MISSING:
+                    raise TypeError(
+                        "At least one positional argument or `tone` is required."
+                    )
+                # `tone` and `acciPref`
+                return cls._fromTone(tone, acciPref)
+            if tone is not _MISSING:
+                # `step` and `tone`
+                step = ostep(arg1)
+                tone = _resolveTone(tone)
+                return cls._fromStepAndTone(step, tone)
+            if isinstance(arg1, str):
+                # string notation
+                return cls._parse(arg1)
+            if isinstance(arg1, PitchBase):
+                # another `PitchBase` object
                 return arg1.opitch
-            else:
-                step = arg1.step
-                acci = arg1.acci + arg2
-                return cls._newHelper(step, acci)
+            if isinstance(arg1, DegBase):
+                # `DegBase` object
+                return cls._newHelper(arg1.step, arg1.acci)
+            # `step` only
+            step = ostep(arg1)
+            return cls._newHelper(step, 0)
 
-        if isinstance(arg1, str):
-            step = _parseStep(arg1)
-        else:
-            step = arg1 % 7
+        acci = _resolveAcci(arg2)
+        if isinstance(arg1, PitchBase):
+            # `PitchBase` and `acci`
+            return arg1.opitch.alter(acci)
+        if isinstance(arg1, DegBase):
+            return cls._newHelper(arg1.step, arg1.acci + acci)
 
-        if arg2 is None:
-            acci = 0
-        elif isinstance(arg2, str):
-            acci = _parseAcci(arg2)
-        else:
-            acci = arg2
-            if acci % 1 == 0:
-                acci = int(acci)
-
+        # `step` and `acci`
+        step = ostep(arg1)
         return cls._newHelper(step, acci)
+
+    @classmethod
+    @lru_cache
+    def _fromStepAndTone(cls, step: int, tone: Real) -> Self:
+        octave, step = divmod(step, 7)
+        acci = tone - MAJOR_SCALE_TONES[step] - octave * 12
+        return cls._newHelper(step, acci)
+
+    @classmethod
+    @lru_cache
+    def _fromTone(
+        cls,
+        tone: Real,
+        acciPref: AcciPref = AcciPrefs.CLOSEST_FLAT_F_SHARP,
+    ) -> Self:
+        step = acciPref(tone)
+        octaves, ostep = divmod(step, 7)
+        acci = tone - MAJOR_SCALE_TONES[ostep] - octaves * 12
+        return cls._newHelper(step, acci)
+
+    @classmethod
+    def _parsePitch(cls, src: str) -> Self:
+        return cls._newHelper(*_parseOPitch(src))
+
+    @classmethod
+    def _parseInterval(cls, src: str) -> Self:
+        step, acci, neg = _parseInterval(src)
+        step %= 7
+        res = cls._newHelper(step, acci)
+        if neg:
+            res = -res
+        return res
 
     @property
     def step(self) -> int:
         return self._step
 
     @property
-    def acci(self) -> float:
+    def acci(self) -> Real:
         return self._acci
 
     @property
@@ -966,23 +1223,22 @@ class OPitch(PitchBase, Deg):
         return 0
 
     @property
-    def tone(self) -> float:
+    @lru_cache
+    def tone(self) -> Real:
         """
         Chromatic tone of the pitch, in half-steps.
         """
         return MAJOR_SCALE_TONES[self.step] + self.acci
 
     @property
-    def qual(self) -> float:
-        if self.step in PERFECT_INTERVAL_STEPS:
-            return _prefectQual(self.acci)
-        else:
-            return _majorQual(self.acci)
+    @lru_cache
+    def qual(self) -> Real:
+        return _qualMap(self.step, self.acci)
 
     def atOctave(self, octave: int = 0) -> Pitch:
         return Pitch._newHelper(self, octave - self.tone // 12)
 
-    def withAcci(self, acci: float = 0) -> Self:
+    def withAcci(self, acci: Real = 0) -> Self:
         return self.__class__(self.step, acci)
 
     def isEnharmonic(self, other: Self) -> bool:
@@ -1024,6 +1280,9 @@ class OPitch(PitchBase, Deg):
         acci = tone - MAJOR_SCALE_TONES[step] - octave * 12
         return self._newHelper(step, acci)
 
+    def __abs__(self) -> Self:
+        return self
+
     def __str__(self) -> str:
         return f"{STEP_NAMES[self.step]}{_acci2Str(self.acci)}"
 
@@ -1033,6 +1292,9 @@ class OPitch(PitchBase, Deg):
     def __hash__(self) -> int:
         return hash((self.step, self.acci))
 
+    def __reduce__(self):
+        return (self._newImpl, (self.step, self.acci))
+
 
 class Pitch(PitchBase):
     """
@@ -1040,73 +1302,239 @@ class Pitch(PitchBase):
     """
 
     __slots__ = ("_opitch", "_o")
-    _C0 = None
+    _C_0 = None
 
     if t.TYPE_CHECKING:
+        # constructors inherited from `OPitch` but has an additional keyword argument `o`
 
         @overload
-        def __new__(cls, src: str) -> Self: ...
+        def __new__(cls, src: str, *, o: int) -> Self:
+            """
+            Equivalent to `Pitch(OPitch(src), o=o)`.
+            """
+            ...
 
         @overload
-        def __new__(cls, step: int = 0, acci: float = 0) -> Self: ...
+        def __new__(cls, step: int | str, acci: Real | str = 0, *, o: int) -> Self:
+            """
+            Equivalent to `Pitch(OPitch(step, acci), o=o)`.
+            """
+            ...
 
         @overload
-        def __new__(cls, opitch: PitchBase = OPitch.C, octave: int = 0) -> Self: ...
+        def __new__(cls, deg: DegBase, acci: Real | str = 0, *, o: int) -> Self:
+            """
+            Equivalent to `Pitch(OPitch(deg, acci), o=o)`.
+            """
+            ...
+
+        @overload
+        def __new__(cls, step: int | str, *, tone: Real | PitchBase, o: int) -> Self:
+            """
+            Eauivalent to `Pitch(OPitch(step, tone=tone), o=o)`.
+            """
+            ...
+
+        @overload
+        def __new__(
+            cls,
+            *,
+            tone: Real | PitchBase,
+            acciPref: AcciPref = AcciPrefs.CLOSEST_FLAT_F_SHARP,
+            o: int,
+        ) -> Self:
+            """
+            Eauivalent to `Pitch(OPitch(tone=tone, acciPref=acciPref), o=o)`
+            """
+            ...
+
+        # new constructors for `Pitch`
+
+        @overload
+        def __new__(cls, src: str) -> Self:
+            """
+            Creates a new `Pitch` object from string notation, in the form of either a pitch
+            notation (e.g. `"C_0"`, `"F+_-1"`, `"B-_2"`) or an interval notation (e.g. `"M3"`,
+            `"m10"`, `"-P5"`, `"A9"`).
+
+            A formal definition of pitch notation and interval notation is displayed in the
+            [extended BNF](https://en.wikipedia.org/wiki/Extended_Backus%E2%80%93Naur_form)
+            syntax below:
+
+            ```ebnf
+            accepted-input    = pitch-notation | interval-notation;
+            pitch-notation    = opitch-notation, ["_", [sign], integer];
+            ```
+
+            Where the meaning of some symbols are explained in the `OPitch` documentation.
+            """
+            ...
+
+        @overload
+        def __new__(cls, opitch: OPitch, *, o: int = 0) -> Self:
+            """
+            Creates a `Pitch` object by putting an `OPitch` into a specific *nominal* octave.
+            """
+            ...
+
+        @overload
+        def __new__(cls, step: int | str, acci: Real | str = 0) -> Self:
+            """
+            Creates a `Pitch` object from a step and an accidental. The step value is octave
+            sensitive.
+
+            Equivalent to `Pitch(OPitch(step % 7, acci), o=step // 7)`.
+            """
+            ...
+
+        @overload
+        def __new__(cls, deg: DegBase, acci: Real | str = 0) -> Self:
+            """
+            Creates a `Pitch` object from a degree and an accidental. If the degree object
+            already has an accidental, it will be added to the given `acci` value.
+            """
+            ...
+
+        @overload
+        def __new__(cls, step: int | str, *, tone: Real | PitchBase) -> Self:
+            """
+            Creates a `Pitch` object from a step and a chromatic tone. Both the step and tone
+            are octave sensitive.
+
+            Denote `o = step // 7`, then this constructor is equivalent to
+            `Pitch(OPitch(step % 7, tone=tone - o * 12), o=o)`.
+            """
+            ...
+
+        @overload
+        def __new__(
+            cls,
+            *,
+            tone: Real | PitchBase,
+            acciPref: AcciPref = AcciPrefs.CLOSEST_FLAT_F_SHARP,
+        ) -> Self:
+            """
+            Creates a `Pitch` object from a chromatic tone with accidental automatically
+            chosen by accidental preference. The tone value is octave sensitive.
+            """
+            ...
 
     @classconst
-    def C0(cls) -> Self:
+    def C_0(cls) -> Self:
         """
         The middle C pitch. It is the identity value of the pitch abelian group.
         """
-        if cls._C0 is None:
-            cls._C0 = cls._newHelper(OPitch.C, 0)
-        return cls._C0
+        if cls._C_0 is None:
+            cls._C_0 = cls._newHelper(OPitch.C, 0)
+        return cls._C_0
+
+    def __new__(
+        cls,
+        arg1=_MISSING,
+        arg2=_MISSING,
+        *,
+        o=_MISSING,
+        tone=_MISSING,
+        acciPref=AcciPrefs.CLOSEST_FLAT_F_SHARP,
+    ) -> Self:
+        if o is not _MISSING:
+            # call `OPitch` constructor with other arguments except `o`
+            opitch = OPitch(arg1, arg2, tone=tone, acciPref=acciPref)
+            return cls._newHelper(opitch, o)
+
+        if arg2 is _MISSING:
+            if arg1 is _MISSING:
+                # `tone` and `acciPref`
+                tone = _resolveTone(tone)
+                return cls._fromTone(tone, acciPref)
+            if tone is not _MISSING:
+                # `step` and `tone`
+                step = _resolveStep(arg1)
+                tone = _resolveTone(tone)
+                return cls._fromStepAndTone(step, tone)
+            if isinstance(arg1, str):
+                # string notation
+                return cls._parse(arg1)
+            if isinstance(arg1, Pitch):
+                # another `Pitch` object
+                return arg1
+            if isinstance(arg1, PitchBase):
+                # `PitchBase` object
+                return cls._newHelper(arg1.opitch, 0)
+            if isinstance(arg1, DegBase):
+                # `DegBase` object
+                return cls._fromStepAndAcci(arg1.step, arg1.acci)
+
+            # `step` only
+            step = _resolveStep(arg1)
+            return cls._fromStepAndAcci(step, 0)
+
+        acci = _resolveAcci(arg2)
+        if isinstance(arg1, Pitch):
+            # a `Pitch` object and `acci`
+            return arg1.alter(acci)
+        if isinstance(arg1, PitchBase):
+            return cls._newHelper(arg1.opitch.alter(acci), 0)
+        if isinstance(arg1, DegBase):
+            return cls._fromStepAndAcci(arg1.step, arg1.acci + acci)
+
+        # `step` and `acci`
+        step = _resolveStep(arg1)
+        return cls._fromStepAndAcci(step, acci)
 
     @classmethod
-    def fromTone(cls, tone: float, acciPref: AcciPref = AcciPrefs.CLOSEST_FLAT_F_SHARP):
-        opitch = OPitch.fromTone(tone, acciPref)
-        octave = (tone - opitch.tone) // 12
-        return cls._newHelper(opitch, octave)
-
-    def __new__(cls, arg1: int | PitchBase, arg2: float | int | None = None) -> Self:
-        if isinstance(arg1, str):
-            return cls._parseStr(arg1)
-        if isinstance(arg1, Pitch):
-            if arg2 is None:
-                return arg1
-            arg1 = arg1.opitch
-        if isinstance(arg1, OPitch):
-            opitch = arg1
-            octave = arg2
-        else:
-            octave, ostep = divmod(arg1, 7)
-            opitch = OPitch(ostep, arg2)
-        return cls._newHelper(opitch, octave)
+    def _fromTone(cls, tone: Real, acciPref: AcciPref = AcciPrefs.CLOSEST_FLAT_F_SHARP):
+        o, otone = divmod(tone, 12)
+        opitch = OPitch._fromTone(otone, acciPref)
+        return cls._newHelper(opitch, o)
 
     @classmethod
     @lru_cache
-    def _parseStr(self, src: str) -> Self:
+    def _fromStepAndAcci(cls, step: int, acci: Real) -> Self:
+        ostep, o = divmod(step, 7)
+        opitch = OPitch._newHelper(ostep, acci)
+        return cls._newHelper(opitch, o)
+
+    @classmethod
+    @lru_cache
+    def _fromStepAndTone(cls, step: int, tone: Real) -> Self:
+        ostep, o = divmod(step, 7)
+        acci = tone - MAJOR_SCALE_TONES[ostep] - o * 12
+        opitch = OPitch._newHelper(ostep, acci)
+        return cls._newHelper(opitch, o)
+
+    @classmethod
+    @lru_cache
+    def _parsePitch(cls, src: str) -> Self:
         if not src[-1].isdigit():
             # octave not specified, assume octave 0
-            opitch = OPitch._parseStr(src)
+            opitch = OPitch._parse(src)
             octave = 0
         else:
-            match: re.Match[str] = _trailingOctaveRe.search(src)
-            opitch = OPitch._parseStr(src[: match.start()])
-            octave = int(match.group()[1:])
+            opitch, octave = src.rsplit("_", 1)
+            opitch = OPitch._parsePitch(opitch)
+            octave = int(octave)
         return Pitch._newHelper(opitch, octave)
 
     @classmethod
-    @lru_cache
-    def _newHelper(cls, opitch: OPitch, octave: int) -> Self:
-        return cls._newImpl(opitch, octave)
+    def _parseInterval(cls, src: str) -> Self:
+        step, acci, neg = _parseInterval(src)
+        result = cls._fromStepAndAcci(step, acci)
+        if neg:
+            result = -result
+        return result
 
     @classmethod
-    def _newImpl(cls, opitch: OPitch, octave: int) -> Self:
+    @lru_cache
+    def _newHelper(cls, opitch: OPitch, o: int) -> Self:
+        return cls._newImpl(opitch, o)
+
+    @classmethod
+    def _newImpl(cls, opitch: OPitch, o: int) -> Self:
         """The fundamental constructor of `Pitch` class."""
         self = super().__new__(cls)
         self._opitch = opitch
-        self._o = octave
+        self._o = o
         return self
 
     @property
@@ -1122,6 +1550,7 @@ class Pitch(PitchBase):
         return self._o
 
     @property
+    @lru_cache
     def step(self) -> int:
         """
         Degree of the pitch in C major scale, not considering accidentals. Equals to the step
@@ -1134,6 +1563,7 @@ class Pitch(PitchBase):
         return self.opitch.acci
 
     @property
+    @lru_cache
     def tone(self) -> Real:
         """
         Chromatic tone of the pitch, in half-steps. Equals to the chromatic tone of octave
@@ -1145,14 +1575,14 @@ class Pitch(PitchBase):
     def qual(self) -> Real:
         return self.opitch.qual
 
-    def interval(self, compound: bool = False, **kwargs):
-        return super().interval()  # TODO)) handle negative intervals
+    def interval(self, *, compound: bool = False, **kwargs):
+        if self < self.C_0:  # negative interval
+            return f"-{(-self).interval(compound=compound, **kwargs)}"
+        else:
+            return super().interval(compound=compound, **kwargs)
 
-    def withAcci(self, acci: float = 0) -> Self:
+    def withAcci(self, acci: Real = 0) -> Self:
         return self._newHelper(self.opitch.withAcci(acci), self.o)
-
-    def atOctave(self, octave: int = 0) -> Self:
-        return self.opitch.atOctave(octave)
 
     def respell(self, stepAlt: int) -> Self:
         if stepAlt == 0:
@@ -1182,7 +1612,7 @@ class Pitch(PitchBase):
 
     def __mul__(self, other: int) -> Self:
         if other == 0:
-            return self.C0
+            return self.C_0
         if other == 1:
             return self
         if not isinstance(other, Integral):
@@ -1201,12 +1631,13 @@ class Pitch(PitchBase):
     def __repr__(self):
         return f"{self.__class__.__name__}({str(self)})"
 
+    @lru_cache
     def __hash__(self) -> int:
         return hash((self.opitch, self.o))
 
 
 def _modeAlter(
-    pitches: np.ndarray[OPitch], step: int, acci: float
+    pitches: np.ndarray[OPitch], step: int, acci: Real
 ) -> np.ndarray[OPitch]:
     if acci != 0:
         if step == 0:
@@ -1293,9 +1724,7 @@ class Mode(Sequence[OPitch], Set[OPitch], metaclass=ABCMeta):
     @property
     def cyc(self) -> _ModeCyclicAccessor:
         """Cyclic slicing and access support."""
-        if not hasattr(self, "_cyc"):
-            self._cyc = _ModeCyclicAccessor(self)
-        return self._cyc
+        return _ModeCyclicAccessor(self)
 
     def diff(self) -> Iterable[OPitch]:
         """
@@ -1391,8 +1820,8 @@ class Mode(Sequence[OPitch], Set[OPitch], metaclass=ABCMeta):
 
     def alter(
         self,
-        arg1: int | Iterable[int] | Iterable[float],
-        arg2: float | Iterable[float] | None = None,
+        arg1: int | Iterable[int] | Iterable[Real],
+        arg2: Real | Iterable[Real] | None = None,
     ) -> Self:
         """
         Apply alterations to the scale by adjusting the accidentals of specific pitches.
@@ -1656,4 +2085,3 @@ class _ScaleCyclicAccessor:
             return Scale._newHelper(self._parent.tonic + startPitch, newMode)
         else:
             key %= len(self._parent.mode)
-            return self._parent[key]

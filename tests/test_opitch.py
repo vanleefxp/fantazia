@@ -2,6 +2,7 @@ import unittest
 from pathlib import Path
 import sys
 from fractions import Fraction as Q
+from importlib.metadata import PackageNotFoundError, version
 
 DIR = Path(__file__).parent if "__file__" in locals() else Path.cwd()
 sys.path.append(str(DIR / "../src"))
@@ -9,18 +10,22 @@ sys.path.append(str(DIR / "../src"))
 import fantazia as fz  # noqa: E402
 
 
-@lambda _: _()
-def HAS_M21():
+def hasPackage(package_name):
     try:
-        # fmt: off
-        import music21  # noqa: F401
+        version(package_name)
         return True
-        # fmt: on
-    except ImportError:
+    except PackageNotFoundError:
         return False
 
 
 class TestOPitch(unittest.TestCase):
+    def test_slots(self):
+        types = (fz.OPitch, fz.Pitch, fz.ODeg)
+        for t in types:  # the types with `__slots__` shouldn't have `__dict__`
+            self.assertNotIn("__dict__", dir(t))
+        with self.assertRaises(AttributeError):
+            fz.OPitch("C").x = 1  # type: ignore
+
     def test_parse(self):
         # create `OPitch` from string representation
         testData = (
@@ -132,7 +137,7 @@ class TestOPitch(unittest.TestCase):
             self.assertEqual(p1.respell(degAlt), p2)
             self.assertEqual(p2.respell(-degAlt), p1)
 
-    @unittest.skipUnless(HAS_M21, "requires `music21` to be installed")
+    @unittest.skipUnless(hasPackage("music21"), "requires `music21` to be installed")
     def test_m21(self):
         from music21.pitch import Pitch as m21Pitch
 
@@ -188,6 +193,72 @@ class TestOPitch(unittest.TestCase):
         )
         for p, ans in testData:
             self.assertEqual(p.interval(), ans)
+
+    def test_fromTone(self):
+        testData = {
+            k: map(lambda t: (t[0], fz.OPitch(t[1])), v)
+            for k, v in zip(
+                (
+                    fz.AcciPrefs.SHARP,
+                    fz.AcciPrefs.FLAT,
+                    fz.AcciPrefs.CLOSEST_SHARP,
+                    fz.AcciPrefs.CLOSEST_FLAT,
+                    fz.AcciPrefs.CLOSEST_FLAT_F_SHARP,
+                ),
+                (
+                    (
+                        (1, "C+"),
+                        (3, "D+"),
+                        (Q("11/2"), "F[+1/2]"),
+                        (6, "F+"),
+                        (Q("13/2"), "F[+3/2]"),
+                        (8, "G+"),
+                        (10, "A+"),
+                    ),
+                    (
+                        (1, "D-"),
+                        (3, "E-"),
+                        (Q("11/2"), "G[-3/2]"),
+                        (6, "G-"),
+                        (Q("13/2"), "G[-1/2]"),
+                        (8, "A-"),
+                        (10, "B-"),
+                    ),
+                    (
+                        (1, "C+"),
+                        (3, "D+"),
+                        (Q("11/2"), "F[+1/2]"),
+                        (6, "F+"),
+                        (Q("13/2"), "G[-1/2]"),
+                        (8, "G+"),
+                        (10, "A+"),
+                    ),
+                    (
+                        (1, "D-"),
+                        (3, "E-"),
+                        (Q("11/2"), "F[+1/2]"),
+                        (6, "G-"),
+                        (Q("13/2"), "G[-1/2]"),
+                        (8, "A-"),
+                        (10, "B-"),
+                    ),
+                    (
+                        (1, "D-"),
+                        (3, "E-"),
+                        (Q("11/2"), "F[+1/2]"),
+                        (6, "F+"),
+                        (Q("13/2"), "G[-1/2]"),
+                        (8, "A-"),
+                        (10, "B-"),
+                    ),
+                ),
+            )
+        }
+
+        for acciPref, data in testData.items():
+            with self.subTest(acciPref=acciPref):
+                for tone, res in data:
+                    self.assertEqual(fz.OPitch._fromTone(tone, acciPref), res)
 
 
 if __name__ == "__main__":

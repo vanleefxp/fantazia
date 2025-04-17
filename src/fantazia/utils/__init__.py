@@ -1,31 +1,20 @@
 from collections.abc import Iterable
-from typing import Sequence, TypeVar, Callable, Type
+from typing import Sequence, Callable
 from bisect import bisect_left
 from enum import StrEnum, IntEnum
+from warnings import deprecated
 
 import numpy as np
 
-__all__ = ["bisect_round", "bsearch", "RoundMode"]
 
-T = TypeVar("T")
-
-
-class classproperty(property):
-    def __get__(self, owner_self: T, owner_cls: Type[T]):
-        return self.fget(owner_cls)
-
-
-class classconst(classproperty):
-    def __set__(self, instance, value):
-        raise ValueError("Cannot set constant value")
-
-
+@deprecated("Use `RMode` instead.")
 class Rounding(IntEnum):
     FLOOR = -1
     ROUND = 0
     CEIL = 1
 
 
+@deprecated("Use `RMode` instead.")
 class RoundMode(StrEnum):
     HALF_UP = "half-up"
     HALF_EVEN = "half-even"
@@ -34,76 +23,7 @@ class RoundMode(StrEnum):
     HALF_INF = "half-inf"
 
 
-class RMode(StrEnum):
-    FLOOR = F = "f"
-    """Round towards negative infinity."""
-
-    CEIL = C = "c"
-    """Round towards positive infinity."""
-
-    UP = U = "u"
-    """Round away from zero."""
-
-    DOWN = D = "d"
-    """Round towards zero."""
-
-    EVEN = E = "e"
-    """Round to the nearest even integer."""
-
-    ODD = O = "o"  # noqa: E741
-    """Round to the nearest odd integer."""
-
-
-def rdivmod(
-    n: float, d: float = 1, /, round: bool = True, rmode: RMode = RMode.E
-) -> tuple[int, float]:
-    """
-    Rounded division of n by d. Returns the quotient and remainder.
-    """
-    rmode = RMode(rmode)
-    q, r = divmod(n, d)
-    q = int(q)
-    if r == 0:
-        return (q, 0)
-    if not round or r * 2 == d:
-        match rmode:
-            case RMode.FLOOR:
-                pass
-            case RMode.CEIL:
-                q += 1
-                r -= d
-            case RMode.UP:
-                if q >= 0:
-                    q += 1
-                    r -= d
-            case RMode.DOWN:
-                if q < 0:
-                    q += 1
-                    r -= d
-            case RMode.EVEN:
-                if q % 2 == 1:
-                    q += 1
-                    r -= d
-            case RMode.ODD:
-                if q % 2 == 0:
-                    q += 1
-                    r -= d
-            case _:
-                raise ValueError(f"Invalid round mode: {rmode}")
-    elif r * 2 > d:
-        q += 1
-        r -= d
-    return (q, r)
-
-
-def rdiv(n: float, d: float = 1, **kwargs) -> int:
-    return rdivmod(n, d, **kwargs)[0]
-
-
-def rmod(n: float, d: float = 1, **kwargs) -> float:
-    return rdivmod(n, d, **kwargs)[1]
-
-
+@deprecated("use `rdivmod()` instead.")
 def rounding(
     x: float,
     step: float = 1,
@@ -140,7 +60,8 @@ def rounding(
             raise ValueError(f"Invalid rounding: {rounding}")
 
 
-def bisect_round(
+@deprecated("Use `rbisect()` instead.")
+def bisect_round[T](
     a: Sequence[T],
     x: T,
     lo: int | None = 0,
@@ -180,13 +101,19 @@ def bisect_round(
             return idx
 
 
-def bsearch(
+def bsearch[T](
     a: Sequence[T],
     x: T,
     lo: int | None = 0,
     hi: int | None = None,
     key: Callable[[T], int] | None = None,
 ) -> int:
+    """
+    Perform binary search on a sorted sequence `a` to find the index of item `x`.
+    If `x` exists in `a`, returns its index. Otherwise, returns -(insertion point) - 1
+
+    **Note**: This method works like Java's `Arrays.binarySearch()` method.
+    """
     idx = bisect_left(a, x, lo, hi, key)
     item = a[idx]
     if item == x:
