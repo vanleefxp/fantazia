@@ -1,11 +1,12 @@
 import unittest
-from pathlib import Path
-import sys
+
+# from pathlib import Path
+# import sys
 from fractions import Fraction as Q
 from importlib.metadata import PackageNotFoundError, version
 
-DIR = Path(__file__).parent if "__file__" in locals() else Path.cwd()
-sys.path.append(str(DIR / "../src"))
+# DIR = Path(__file__).parent if "__file__" in locals() else Path.cwd()
+# sys.path.append(str(DIR / "../src"))
 
 import fantazia as fz  # noqa: E402
 
@@ -20,7 +21,7 @@ def hasPackage(package_name):
 
 class TestOPitch(unittest.TestCase):
     def test_slots(self):
-        types = (fz.OPitch, fz.Pitch, fz.ODeg)
+        types = (fz.OPitch, fz.Pitch)
         for t in types:  # the types with `__slots__` shouldn't have `__dict__`
             self.assertNotIn("__dict__", dir(t))
         with self.assertRaises(AttributeError):
@@ -39,6 +40,12 @@ class TestOPitch(unittest.TestCase):
             # microtonal notation
             ("F[+1/2]", fz.OPitch(3, Q(1, 2))),
             ("B[-1/2]", fz.OPitch(6, Q(-1, 2))),
+            ("A[+0.25]", fz.OPitch(5, 0.25)),
+            # degree number
+            ("1+", fz.OPitch(0, 1)),
+            ("3-", fz.OPitch(2, -1)),
+            ("5++", fz.OPitch(4, 2)),
+            ("6--", fz.OPitch(5, -2)),
         )
         for src, ans in testData:
             self.assertEqual(fz.OPitch(src), ans)
@@ -46,6 +53,8 @@ class TestOPitch(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             fz.OPitch("XXX")  # invalid pitch name
+            fz.OPitch("8")
+            fz.OPitch("0")
 
     def test_co5(self):
         # generate pitches by circle of fifth order
@@ -193,6 +202,7 @@ class TestOPitch(unittest.TestCase):
         )
         for p, ans in testData:
             self.assertEqual(p.interval(), ans)
+            self.assertEqual(fz.OPitch(ans), p)
 
     def test_fromTone(self):
         testData = {
