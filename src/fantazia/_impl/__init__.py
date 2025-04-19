@@ -1422,10 +1422,6 @@ class Pitch(PitchBase):
         self._o = o
         return self
 
-    @lru_cache
-    def something(self) -> int:
-        return 0
-
     @property
     def opitch(self) -> OPitch:
         return self._opitch
