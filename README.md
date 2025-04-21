@@ -2,9 +2,9 @@
 
 ![Python Version from PEP 621 TOML](https://img.shields.io/python/required-version-toml?tomlFilePath=https%3A%2F%2Fraw.githubusercontent.com%2Fvanleefxp%2Ffantazia%2Fmaster%2Fpyproject.toml) ![GitHub License](https://img.shields.io/github/license/vanleefxp/fantazia)
 
-`fantazia` is a lightweight library for *math-based* music theory computation. 
+`fantazia` is a Python library for *math-based* music theory computation. 
 
-Different from sophisticated and feature-rich [`music21`](https://github.com/cuthbertLab/music21) library which provides a comprehensive music analysis toolkit, the target of `fantazia` is to *regularize music computations by mathematic rules*. The music related types in `fantazia` do not contain more information than necessary as a mathematic abstraction, and are immutable. Support for conversion to `music21` types is currently implemented only for pitch objects.
+Different from sophisticated and feature-rich [`music21`](https://github.com/cuthbertLab/music21) which provides a comprehensive music analysis toolkit, the target of `fantazia` is to *regularize music computations by mathematic rules*. The music related types in `fantazia` do not contain more information than necessary as an abstraction (like color and display style), and are immutable. Support for conversion to `music21` types is currently implemented only for pitch objects.
 
 > The package is currently under development and not yet distributed to PyPI. You may download the `.whl` or `.tar.gz` distribution file in the `dist` sub-directory and install from it to have a try.
 
@@ -15,9 +15,13 @@ Different from sophisticated and feature-rich [`music21`](https://github.com/cut
 
 ## Pitch and Interval
 
-`fantazia` provides two main pitch / interval types, which are `OPitch`, standing for a *pitch with no octave specification*, and `Pitch`, representing a *pitch in a specific octave*.
+`fantazia` provides two main pitch / interval types, which are `OPitch`, standing for a **pitch class** (pitch with no octave specification), and `Pitch`, representing a **pitch** in a specific octave.
 
-In `fantazia`, we do not distinguish between pitch and interval, because a pitch can also be regarded as an interval from middle C, just as a real number can be regarded as a point on the number line as well as a translation amount. The arithmetic expression 2 + 3 = 5, for example, can be explained by moving point 2 right by 3 steps, or moving point 3 right by 2 steps, or the combination of the operations "moving right 2 steps" and "moving right 3 steps". Here real numbers act both as a static value and an operator. For pitches and intervals, this is the same. The pitch E can stand for the static pitch and also a major third interval. For this reason, `fantazia` provides `OInterval` as an alias of `OPitch` and `Interval` for `Pitch`. 
+Unlike `music21`, `fantazia` do not create different types for pitches and intervals, because a pitch can also be regarded as an interval from middle C. This makes the arithmetic of pitch objects more convenient and consistent.
+
+> This consideration has an analogy with points and vectors in Euclidean space, where a point can also be regarded as a vector starting from origin. Distinguishing between vectors and points is hence not necessary.
+
+<!-- , just as a real number can be regarded as a point on the number line as well as a translation amount. The arithmetic expression 2 + 3 = 5, for example, can be explained by moving point 2 right by 3 steps, or moving point 3 right by 2 steps, or the combination of the operations "moving right 2 steps" and "moving right 3 steps". Here real numbers act both as a static value and an operator. For pitches and intervals, this is the same. The pitch E can stand for the static pitch and also a major third interval. For this reason, `fantazia` provides `OInterval` as an alias of `OPitch` and `Interval` for `Pitch`.  -->
 
 
 ### Creating Pitch / Interval Objects
@@ -25,106 +29,31 @@ In `fantazia`, we do not distinguish between pitch and interval, because a pitch
 
 #### `OPitch`: pitch without specific octave
 
-The basic method to create an `OPitch` object is to call `OPitch()` constructor with a specified degree and accidental. 
+The simplest method to create an `OPitch` object is to call `OPitch()` constructor with a notation string. A notation string consists of a step name and, a symbolic representation of accidental, if any.
 
-The **degree** is an integer between 0 and 6 (both inclusive), standing for the note names C, D, E, F, G, A, B, respectively. The note name characters, regardless of case, are also accepted. 
+A valid step name includes:
 
-<table>
-<tbody>
-<tr>
-    <th>Note Name</th>
-    <td>C</td>
-    <td>D</td>
-    <td>E</td>
-    <td>F</td>
-    <td>G</td>
-    <td>A</td>
-    <td>B</td>
-</tr>
-<tbody>
-<tr>
-    <th>Sofège Name</th>
-    <td>do</td>
-    <td>re</td>
-    <td>mi</td>
-    <td>fa</td>
-    <td>sol</td>
-    <td>la</td>
-    <td>si</td>
-</tr>
-<tr>
-    <th>Degree</th>
-    <td>0</td>
-    <td>1</td>
-    <td>2</td>
-    <td>3</td>
-    <td>4</td>
-    <td>5</td>
-    <td>6</td>
-</tr>
-</tbody>
-</table>
+* a letter among `C`, `D`, `E`, `F`, `G`, `A`, `B` 
+* a solfège name among `do` / `ut`, `re`, `mi`, `fa`, `sol`, `la`, `si` / `ti`
+* a degree value among `1`, `2`, `3`, `4`, `5`, `6`, `7` (note that in string representation, counting starts from one instead of zero as in the tradition of music theory)
 
-**Accidental** is a numeric value notating the pitch alteration from the standard pitch in semitones. When accidental is omitted, it defaults to natural (no accidental). 
+A symbolic accidental can be:
 
-<table>
-<tbody>
-<tr>
-    <th>Accidental</th>
-    <td>&#x1d12a;</td>
-    <td>&sharp;</td>
-    <td>&natural;</td>
-    <td>&flat;</td>
-    <td>&#x1d12b;</td>
-</tr>
-<tr>
-    <th>Name</th>
-    <td>double sharp</td>
-    <td>sharp</td>
-    <td>natural</td>
-    <td>flat</td>
-    <td>double flat</td>
-</tr>
-<tr>
-    <th>Value</th>
-    <td>+2</td>
-    <td>+1</td>
-    <td>0</td>
-    <td>-1</td>
-    <td>-2</td>
-</tr>
-</tbody>
-</table>
-
-Degree and accidental can be accessed by the `deg` and `acci` properties of `OPitch`.
-
-For code readability concerns, `fantazia` keeps some commonly used degree and accidental values in the form of numeric constants. They can be accessed by `fz.Degs.XXX` and `fz.Accis.XXX`. 
+* a combination of `+` and `-` signs, where `+` stands for sharp (&sharp;) and `-` for flat (&flat;). In this sense, `++` represents double sharp (&#x1d12a;) and `--` is for double flat (&#x1d12b;).
+* A numeric value, in the form of an integer, decimal or fraction, preceded by a `+` or `-`, and wrapped in square brackets. (to support microtonal notation and simplify multiple accidentals. *e.g.* `[+1/2]`, `[-0.5]`, `[+4]`) 
 
 ```python
 import fantazia as fz
 
-# create pitch by degree and accidental
-p1 = fz.OPitch(fz.Degs.C) # C
-p2 = fz.OPitch("A") # A
-p3 = fz.OPitch(fz.Degs.B, fz.Accis.FLAT) # B flat
-
-print(p1, p2, p3, p3.deg, p3.acci) # Output: C A B- 6 -1
+pitches = map(
+    fz.OPitch, 
+    ("C", "F+", "e-", "G++", "A--", "re+", "7-")
+)
+print(" ".join(map(str, pitches)))
+# C F+ E- G++ A-- D+ B-
 ```
 
-While this basic method can be a little inconvenient sometimes, `fantazia` provides a shortcut by just inputting a string with the note name and accidentals (if any) afterwards. Sharps are expressed py `+` and flats by `-`. `++` and `--` mean double sharp and double flat, respectively. The note name is case-insensitive, still.
-
-```python
-import fantazia as fz
-
-p4 = fz.OPitch("E-") # E flat
-p5 = fz.OPitch("F+") # F sharp
-p6 = fz.OPitch("G++") # G double sharp
-p7 = fz.OPitch("A--") # A double flat
-
-print(p4, p5, p6, p7) # Output: E- F+ G++ A--
-```
-
-> This notation rule is inspired by the syntax of [Alda](https://alda.io/) music programming language. While sometimes people use `#` and `b` to notate sharps and flats, I do not opt for this notation because `b` might be confused with the note name B.
+> This notation rule is inspired by the syntax of [Alda](https://alda.io/) music programming language. While sometimes in plain text people use `#` and `b` to notate sharps and flats, I do not opt for this notation because `b` might be confused with the note name B.
 
 The `OPitch` object has another property called `tone`, which describes the pitch's chromatic position in an octave. The octave space from C to a higher C is mapped to [0, 12) range, and notes C, D, E, F, G, A, B without accidental have tone values of 0, 2, 4, 5, 7, 9, 11, respectively. 
 

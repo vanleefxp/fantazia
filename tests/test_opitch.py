@@ -23,33 +23,44 @@ class TestOPitch(unittest.TestCase):
     def test_slots(self):
         types = (fz.OPitch, fz.Pitch)
         for t in types:  # the types with `__slots__` shouldn't have `__dict__`
-            self.assertNotIn("__dict__", dir(t))
+            with self.subTest(type=t):
+                self.assertNotIn("__dict__", dir(t))
         with self.assertRaises(AttributeError):
             fz.OPitch("C").x = 1  # type: ignore
 
     def test_parse(self):
         # create `OPitch` from string representation
         testData = (
-            ("C", fz.OPitch.C),
-            ("F+", fz.OPitch(3, 1)),
-            ("G++", fz.OPitch(4, 2)),
-            ("D+++", fz.OPitch(1, 3)),
-            ("E-", fz.OPitch(2, -1)),
-            ("A--", fz.OPitch(5, -2)),
-            ("G---", fz.OPitch(4, -3)),
+            ("C", fz.OPitch.C, "C"),
+            ("F+", fz.OPitch(3, 1), "F+"),
+            ("G++", fz.OPitch(4, 2), "G++"),
+            ("D+++", fz.OPitch(1, 3), "D+++"),
+            ("E-", fz.OPitch(2, -1), "E-"),
+            ("A--", fz.OPitch(5, -2), "A--"),
+            ("G[-3]", fz.OPitch(4, -3), "G---"),
+            ("F++++", fz.OPitch(3, 4), "F[+4]"),
+            ("B----", fz.OPitch(6, -4), "B[-4]"),
+            # solfege names
+            ("do", fz.OPitch(0, 0), "C"),
+            ("la", fz.OPitch(5, 0), "A"),
+            ("re+", fz.OPitch(1, 1), "D+"),
+            ("si-", fz.OPitch(6, -1), "B-"),
+            ("ti-", fz.OPitch(6, -1), "B-"),
+            ("ut+", fz.OPitch(0, 1), "C+"),
             # microtonal notation
-            ("F[+1/2]", fz.OPitch(3, Q(1, 2))),
-            ("B[-1/2]", fz.OPitch(6, Q(-1, 2))),
-            ("A[+0.25]", fz.OPitch(5, 0.25)),
+            ("F[+1/2]", fz.OPitch(3, Q(1, 2)), "F[+1/2]"),
+            ("B[-1/2]", fz.OPitch(6, Q(-1, 2)), "B[-1/2]"),
+            ("A[+0.25]", fz.OPitch(5, 0.25), "A[+0.25]"),
             # degree number
-            ("1+", fz.OPitch(0, 1)),
-            ("3-", fz.OPitch(2, -1)),
-            ("5++", fz.OPitch(4, 2)),
-            ("6--", fz.OPitch(5, -2)),
+            ("1+", fz.OPitch(0, 1), "C+"),
+            ("3-", fz.OPitch(2, -1), "E-"),
+            ("5++", fz.OPitch(4, 2), "G++"),
+            ("6--", fz.OPitch(5, -2), "A--"),
         )
-        for src, ans in testData:
+        for src, ans, s in testData:
             self.assertEqual(fz.OPitch(src), ans)
             self.assertEqual(fz.OPitch(src.lower()), ans)  # case insensitive
+            self.assertEqual(str(ans), s)
 
         with self.assertRaises(ValueError):
             fz.OPitch("XXX")  # invalid pitch name
