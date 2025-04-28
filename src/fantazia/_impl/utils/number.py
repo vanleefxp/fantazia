@@ -1,14 +1,21 @@
+from __future__ import annotations
+
 from collections.abc import Sequence
 import typing as t
-from typing import overload, Literal, Callable, Iterable
-
-# from _typeshed import SupportsRichComparison
+from typing import overload, Literal, Callable, Iterable, Self
 from enum import StrEnum
 from bisect import bisect_left
-from numbers import Number, Real
+from numbers import Number, Real, Rational
+from fractions import Fraction as Q
+from math import inf, nan
+from functools import reduce
+import operator as op
+
+from .cls import singleton
 
 if t.TYPE_CHECKING:
     import numpy as np
+    from _typeshed import SupportsRichComparison, SupportsMul
 
 __all__ = [
     "nextPow2",
@@ -25,6 +32,8 @@ __all__ = [
     "grange",
     "smod",
     "resolveInt",
+    "clamp",
+    "interpExp",
 ]
 
 if t.TYPE_CHECKING:
@@ -46,6 +55,12 @@ if t.TYPE_CHECKING:
 
     @overload
     def resolveInt[N: Number](arg: Callable[..., N]) -> Callable[..., int | N]: ...
+
+    @overload
+    def qdiv(a: Rational, b: Rational) -> Rational: ...
+
+    @overload
+    def qdiv(a: Real, b: Real) -> Real: ...
 
 
 def nextPow2(
@@ -168,6 +183,14 @@ class RMode(StrEnum):
 
     ODD = O = "o"  # noqa: E741
     """Round to the nearest odd integer."""
+
+    def __neg__(self) -> Self:
+        if self is RMode.FLOOR:
+            return RMode.CEIL
+        elif self is RMode.CEIL:
+            return RMode.FLOOR
+        else:
+            return self
 
 
 def rdivmod[N: Real](
@@ -351,13 +374,42 @@ def resolveInt(arg: Number | Callable[..., Number]) -> Number | Callable[..., Nu
             return arg
 
 
-def clamp[T: Real](a: T, c: T, b: T) -> T:
+def qdiv(a: Real, b: Real) -> Real:
+    """
+    Division that returns an exact value when both dividend and divisor are rational numbers.
+    """
+    if b == 1:
+        return a
+    if isinstance(a, Rational) and isinstance(b, Rational):
+        return resolveInt(Q(a, b))
+    return a / b
+
+
+def safeDiv(a: float, b: float) -> float:
+    if b == 0:
+        if a > 0:
+            return inf
+        elif a < 0:
+            return -inf
+        else:
+            return nan
+    else:
+        return a / b
+
+
+def clamp[T: SupportsRichComparison](a: T, c: T, b: T) -> T:
     if c < a:
         return a
     elif b < c:
         return b
     else:
         return c
+
+
+def interpExp(a: float, b: float, t: float) -> float:
+    la = np.log(a)
+    lb = np.log(b)
+    return np.exp(la * (1 - t) + lb * t)
 
 
 def _clusterCenters(data: "np.ndarray", labels) -> "np.ndarray":
@@ -390,3 +442,55 @@ def approxGCD(data: Iterable[float], tolerance: float) -> float:
         labels = clusterResult.labels_
         data = _clusterCenters(data, labels)
     return data[0]
+
+
+_PRIME_TABLE_MAX_SIZE = 10000
+
+
+@singleton
+class _PrimeTable:
+    def __new__(cls):
+        self = super().__new__(cls)
+        self._data = [2, 3, 5, 7, 11, 13, 17, 19, 23, 29]
+        return self
+
+    def __getitem__(self, n: int) -> int:
+        from gmpy2 import next_prime
+
+        large_n = n > _PRIME_TABLE_MAX_SIZE
+        bound = min(n, _PRIME_TABLE_MAX_SIZE)
+        if len(self._data) <= bound:
+            lastPrime = self._data[-1]
+            while len(self._data) <= bound:
+                lastPrime = next_prime(lastPrime)
+                self._data.append(lastPrime)
+        if large_n:
+            remaining = n - _PRIME_TABLE_MAX_SIZE
+            prime = self._data[-1]
+            for _ in range(remaining):
+                prime = next_prime(prime)
+            return prime
+        return self._data[n]
+
+
+def primes(start: int = 2) -> Iterable[int]:
+    """A generator that yields prime numbers."""
+    from gmpy2 import next_prime
+
+    n = start
+    while True:
+        yield n
+        n = next_prime(n)
+
+
+def nthPrime(n: int) -> int:
+    """
+    Returns the `n`-th prime number.
+    """
+    if n < 0:
+        raise ValueError("n must be non-negative")
+    return _PrimeTable()[n]
+
+
+def prod[T: SupportsMul](seq: Iterable[T], *, start: T = 1) -> T:
+    return reduce(op.mul, seq, start)

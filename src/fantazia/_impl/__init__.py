@@ -17,11 +17,19 @@ from sortedcontainers import SortedSet
 import pyrsistent as pyr
 from bidict import bidict
 
-if t.TYPE_CHECKING:
+if t.TYPE_CHECKING:  # pragma: no cover
     import music21 as m21  # pragma: no cover
 
-from .utils.cls import cachedProp, cachedGetter
-from .utils.number import rdiv, rdivmod, rbisect, RMode, resolveInt, clamp
+from .utils.cls import (
+    cachedClassProp,
+    cachedGetter,
+    lazyIsInstance,
+    classProp,
+    ClassPropMeta,
+)
+from .utils.number import rdiv, rdivmod, rbisect, RMode, resolveInt, clamp, qdiv
+from .utils.collection import updated, cycGet
+from .math import AbelianElement
 
 # TODO)) put utils in a separate library
 
@@ -34,17 +42,19 @@ __all__ = [
     "AcciPrefs",
     "Modes",
     "PitchBase",
-    "OPitch",
     "DegMap",
     "PitchBase",
     "OPitch",
+    "oP",
     "Pitch",
+    "P",
     "Mode",
     "Scale",
     "STEPS_CO5",
     "MAJOR_SCALE_TONES_CO5",
     "MAJOR_SCALE_TONES",
     "MAJOR_SCALE_TONES_SET",
+    "PERFECTABLE_STEPS",
     "STEP_NAMES",
     "STEP_NAMES_SET",
 ]
@@ -65,18 +75,27 @@ MAJOR_SCALE_TONES_CO5: Sequence[int] = np.arange(-1, 6) * 7 % 12
 MAJOR_SCALE_TONES_CO5.flags.writeable = False
 
 MAJOR_SCALE_TONES: Sequence[int] = np.sort(MAJOR_SCALE_TONES_CO5)
-"""major scale tones in increasing order"""
+"""
+Major scale tones in increasing order. Equivalent to 
+`((np.arange(7) * 2 + 1) % 7 - 1) * 7 % 12`.
+
+**Value**: `np.array([0, 2, 4, 5, 7, 9, 11])`
+"""
 MAJOR_SCALE_TONES.flags.writeable = False
 
 MAJOR_SCALE_TONES_SET = frozenset(MAJOR_SCALE_TONES)
 """major scale tones as a set"""
 
-PERFECTABLE_INTERVAL_STEPS = frozenset((0, 3, 4))
+PERFECTABLE_STEPS = frozenset((0, 3, 4))
+"""Collection of interval step difference values that can have quality "perfect"."""
+
 STEP_NAMES: Sequence[str] = np.roll(np.array([chr(65 + i) for i in range(7)]), -2)
 """step names from C to B"""
 STEP_NAMES.flags.writeable = False
+
 STEP_NAMES_SET = frozenset(STEP_NAMES)
 """step names as a set"""
+
 STEP_NAMES_CO5: Sequence[str] = STEP_NAMES[STEPS_CO5]
 """step names in circle of fifths order"""
 STEP_NAMES_CO5.flags.writeable = False
@@ -89,7 +108,7 @@ SOLFEGE_NAMES_CO5: Sequence[str] = SOLFEGE_NAMES[STEPS_CO5]
 """solfège names in circle of fifths order"""
 SOLFEGE_NAMES_CO5.flags.writeable = False
 _sofegeNamesInvMap = pyr.pmap(
-    {name: i for i, name in enumerate(SOLFEGE_NAMES)} | {"ut": 0, "ti": 6}
+    updated({name: i for i, name in enumerate(SOLFEGE_NAMES)}, {"ut": 0, "ti": 6})
 )
 _intervalQualityMap = bidict(
     (
@@ -103,9 +122,9 @@ _intervalQualityMap = bidict(
 
 _leadingAlphaRe = re.compile(r"^(?:[a-z]+|[1-7])", re.IGNORECASE)
 _trailingDigitsRe = re.compile(r"\d+$")
-_multipleAugRe = re.compile(r"^A+")
+_multipleAugRe = re.compile(r"^A+$")
 _multipleAugNumRe = re.compile(r"^\[A\*(\d+)\]")
-_multipleDimRe = re.compile(r"^d+")
+_multipleDimRe = re.compile(r"^d+$")
 _multipleDimNumRe = re.compile(r"^\[d\*(\d+)\]")
 
 type AcciPref = Callable[[Real], int]
@@ -233,7 +252,10 @@ def _parseInterval(src: str) -> tuple[int, Real, bool]:
     if trailingNumMatch is None:
         raise ValueError(f"Invalid interval format: {src}")
     end = trailingNumMatch.start()
-    step = int(src[end:]) - 1
+    step = int(src[end:])
+    if step == 0:
+        raise ValueError("Interval number cannot be zero.")
+    step -= 1
     qual = _parseQual(src[:end], step)
     acci = _qualInvMap(step, qual)
     return step, acci, neg
@@ -295,8 +317,9 @@ def _majorQualMap(acci: Real) -> Real:
         return acci
 
 
+@lru_cache
 def _qualMap(step: int, acci: Real) -> Real:
-    if step in PERFECTABLE_INTERVAL_STEPS:
+    if step in PERFECTABLE_STEPS:
         return _prefectQualMap(acci)
     else:
         return _majorQualMap(acci)
@@ -325,7 +348,7 @@ def _majorQualMap_m21(acci: Real, *, rmode: RMode | str = RMode.D) -> tuple[int,
 
 
 def _qualMap_m21(step: int, acci: Real) -> tuple[int, Real]:
-    if step in PERFECTABLE_INTERVAL_STEPS:
+    if step in PERFECTABLE_STEPS:
         return _perfectQualMap_m21(acci)
     else:
         return _majorQualMap_m21(acci)
@@ -352,7 +375,7 @@ def _majorQualInvMap(qual: Real) -> Real:
 
 
 def _qualInvMap(step: int, qual: Real) -> Real:
-    if step in PERFECTABLE_INTERVAL_STEPS:
+    if step in PERFECTABLE_STEPS:
         return _prefectQualInvMap(qual)
     else:
         return _majorQualInvMap(qual)
@@ -544,7 +567,7 @@ class DegMap(Sequence[Real]):
 
     __slots__ = ("_tones", "_pitches", "_mode")
 
-    if t.TYPE_CHECKING:
+    if t.TYPE_CHECKING:  # pragma: no cover
 
         @overload
         def __new__(cls, tones: Iterable[Real]): ...
@@ -736,32 +759,20 @@ class _DegMapPitchesView(Sequence["OPitch"], Set["OPitch"]):
         return np.array([self._getItem(k) for k in key], dtype=object)
 
 
-class AbelianElement(metaclass=ABCMeta):
+class PitchNotationBase[OPType: "OPitchNotation", PType: "PitchNotation"](
+    AbelianElement, metaclass=ClassPropMeta
+):
     __slots__ = ()
 
+    @classProp
     @abstractmethod
-    def __add__(self, other: Self) -> Self:
-        """
-        `self + other`, which is the fundamental operation of an abelian group.
-        """
+    def opitchType(cls) -> type[OPType]:
         raise NotImplementedError
 
+    @classProp
     @abstractmethod
-    def __neg__(self) -> Self:
-        """
-        `-self`, which refers to the "inverse" of the current element in group theory.
-        """
+    def pitchType(cls) -> type[PType]:
         raise NotImplementedError
-
-    def __sub__(self, other: Self) -> Self:
-        """
-        `self - other`, equivalent to `self + (-other)`.
-        """
-        return self + (-other)
-
-
-class PitchNotationBase(AbelianElement):
-    __slots__ = ()
 
     @property
     def pos(self) -> Real:
@@ -782,7 +793,7 @@ class PitchNotationBase(AbelianElement):
 
     @property
     @abstractmethod
-    def opitch(self) -> OPitchNotation:
+    def opitch(self) -> OPType:
         raise NotImplementedError
 
     @property
@@ -802,8 +813,14 @@ class PitchNotationBase(AbelianElement):
         """
         return middleA * np.power(2, self.pos - 0.75)
 
+    def atOctave(self, octave: int = 0) -> PType:
+        """
+        Place the current pitch at the given octave.
+        """
+        return self.opitch.atOctave(octave)
 
-class OPitchNotation(PitchNotationBase):
+
+class OPitchNotation[PType: "PitchNotation"](PitchNotationBase[Self, PType]):
     __slots__ = ()
 
     @property
@@ -818,20 +835,227 @@ class OPitchNotation(PitchNotationBase):
         return self.pos % 1 == other.pos % 1
 
 
-class PitchNotation(PitchNotationBase):
+class PitchNotation[OPType: OPitchNotation](PitchNotationBase[OPType, Self]):
     __slots__ = ()
+
+    @classmethod
+    @lru_cache
+    def _newHelper(cls, opitch: OPType, o: int) -> Self:
+        return cls._newImpl(opitch, o)
+
+    @classmethod
+    def _newImpl(cls, opitch: OPType, o: int) -> Self:
+        """The fundamental constructor of `Pitch` class."""
+        self = super().__new__(cls)
+        self._opitch = opitch
+        self._o = o
+        return self
+
+    @classmethod
+    def _fromOPitchAndO(cls, opitch: OPType, o: int) -> Self:
+        return cls._newHelper(opitch, o)
+
+    @property
+    def opitch(self) -> OPitchNotation:
+        return self._opitch
+
+    @property
+    def o(self) -> int:
+        return self._o
 
     @property
     def sgn(self) -> Literal[-1, 0, 1]:
         return (self.pos > 0) - (self.pos < 0)
 
 
-class PitchBase(PitchNotationBase):
-    """Base class for `OPitch` and `Pitch`."""
+class DiatonicPitchBase[OPType: "ODiatonicPitch", PType: "DiatonicPitch"](
+    PitchNotationBase[OPType, PType]
+):
+    __slots__ = ()
+
+    @property
+    @abstractmethod
+    def step(self) -> int:
+        raise NotImplementedError
+
+    @property
+    @abstractmethod
+    def acci(self) -> Real:
+        """An accidental value in semitones that modifies the pitch."""
+        raise NotImplementedError
+
+    @property
+    def qual(self) -> Real:
+        return _qualMap(self.step, self.acci)
+
+    def __repr__(self):
+        return f'{self.__class__.__name__}("{self!s}")'
+
+
+class ODiatonicPitch[PType: "DiatonicPitch"](
+    OPitchNotation[PType], DiatonicPitchBase[Self, PType]
+):
+    __slots__ = ()
+
+    @classmethod
+    @abstractmethod
+    def _fromStepAndAcci(self, step: int, acci: Real) -> Self:
+        raise NotImplementedError
+
+    @classmethod
+    def co5(cls, n: int = 0) -> Self:
+        """
+        Returns the `n`-th pitch in circle of fifths order, starting from C.
+        positive `n` values means `n` perfect fifths up while negative `n` values means `n`
+        perfect fifths down. This method is equivalent to `OPitch("P5") * n`.
+
+        When `n` ranges from -7 to 7, this method yields the tonic of major scale with `abs(n)`
+        sharps (for positive `n`) or flats (for negative `n`).
+        """
+        step = n * 4 % 7
+        acci = (n + 1) // 7
+        return cls._fromStepAndAcci(step, acci)
+
+    def __str__(self) -> str:
+        return f"{STEP_NAMES[self.step]}{_acci2Str(self.acci)}"
+
+
+class DiatonicPitch[OPType: ODiatonicPitch](
+    PitchNotation[OPType], DiatonicPitchBase[OPType, Self]
+):
+    __slots__ = ()
+
+    @property
+    @lru_cache
+    def sgn(self) -> Literal[-1, 0, 1]:
+        if self.step == 0:
+            return (self.acci > 0) - (self.acci < 0)
+        return (self.step > 0) - (self.step < 0)
+
+    @property
+    @lru_cache
+    def step(self) -> int:
+        return self.opitch.step + 7 * self.o
+
+    @property
+    def acci(self) -> Real:
+        return self.opitch.acci
+
+    def __str__(self):
+        return f"{self.opitch!s}_{self.o}"
+
+
+class EDOPitchBase[OPType: "OEDOPitch", PType: "EDOPitch"](
+    DiatonicPitchBase[OPType, PType]
+):
+    __slots__ = ()
+
+    @classProp
+    @abstractmethod
+    def edo(cls) -> int:
+        raise NotImplementedError
+
+    @cachedClassProp
+    def fifthSize(cls) -> int:
+        return round(np.log2(1.5) * cls.edo)
+
+    @cachedClassProp
+    def sharpness(cls) -> int:
+        return cls.fifthSize * 7 - cls.edo * 4
+
+    @cachedClassProp
+    def diatonic(cls) -> Sequence[int]:
+        res = np.arange(-1, 6) * cls.fifthSize - cls.edo * (np.arange(-1, 6) // 2)
+        res = res[np.arange(1, 14, 2) % 7]
+        res.flags.writeable = False
+        return res
+
+    @property
+    def tone(self) -> Real:
+        return self.opitch.tone + self.o * self.edo
+
+    @property
+    def otone(self) -> Real:
+        return self.tone % self.edo
+
+    @property
+    def pos(self) -> Real:
+        if isinstance(self.tone, Rational):
+            return resolveInt(Q(self.tone, self.edo))
+        return self.tone / self.edo
+
+    def isEnharmonic(self, other: Any):
+        if not isinstance(other, self.__class__):
+            return super().isEnharmonic(other)
+        return self.tone == other.tone
+
+
+class OEDOPitch[PType: "EDOPitch"](ODiatonicPitch[PType], EDOPitchBase[Self, PType]):
+    __match_args__ = ("step", "acci", "tone")
+    __slots__ = ()
+
+    @classmethod
+    def _fromStepAndTone(cls, step: int, tone: Real) -> Self:
+        step, o = divmod(step, 7)
+        tone -= o * cls.edo
+        acci = qdiv(tone - cls.diatonic[step], cls.sharpness)
+        return cls._fromStepAndAcci(step, acci)
+
+    def isEnharmonic(self, other: Any):
+        if not isinstance(other, self.__class__):
+            return super().isEnharmonic(other)
+        return self.tone % self.edo == other.tone % self.edo
+
+    @property
+    def tone(self) -> Real:
+        return self.diatonic[self.step] + self.acci * self.sharpness
+
+
+class EDOPitch[OPType: OEDOPitch](DiatonicPitch[OPType], EDOPitchBase[OPType, Self]):
+    __match_args__ = ("opitch", "o", "step", "acci", "tone")
+    __slots__ = ()
+
+    @classmethod
+    def _fromStepAndTone(cls, step: int, tone: Real) -> Self:
+        ostep, o = divmod(step, 7)
+        tone -= o * cls.edo
+        acci = qdiv(tone - cls.diatonic[ostep], cls.sharpness)
+        return cls._fromOPitchAndO(cls.opitchType._fromStepAndAcci(ostep, acci), o)
+
+
+class PitchBase(EDOPitchBase["OPitch", "Pitch"]):
+    """
+    Base class for `OPitch` and `Pitch`. Foundation of the standard 12edo pitch notation
+    system.
+    """
 
     __slots__ = ("_hash",)
 
-    if t.TYPE_CHECKING:
+    @classProp
+    def edo(self) -> int:
+        return 12
+
+    @classProp
+    def fifthSize(self) -> int:
+        return 7
+
+    @classProp
+    def sharpness(self) -> int:
+        return 1
+
+    @classProp
+    def diatonic(self) -> Sequence[int]:
+        return MAJOR_SCALE_TONES
+
+    @classProp
+    def opitchType(self) -> type["OPitch"]:
+        return OPitch
+
+    @classProp
+    def pitchType(self) -> type["Pitch"]:
+        return Pitch
+
+    if t.TYPE_CHECKING:  # pragma: no cover
 
         @overload
         def m21(
@@ -850,7 +1074,7 @@ class PitchBase(PitchNotationBase):
             self,
             *,
             round: bool = True,
-            rmode: RMode | str = RMode.E,
+            rmode: RMode | str = RMode.D,
             asInterval: Literal[True] = True,
         ) -> m21.interval.Interval: ...
 
@@ -870,6 +1094,7 @@ class PitchBase(PitchNotationBase):
         try:  # assume to be a pitch notation
             return cls._parsePitch(src)
         except ValueError:
+            # print("not a pitch notation, trying an interval notation...")
             try:  # assume to be an interval notation
                 return cls._parseInterval(src)
             except ValueError:
@@ -885,15 +1110,6 @@ class PitchBase(PitchNotationBase):
     def _fromM21Interval(cls, m21_obj: m21.pitch.Pitch) -> Self:
         raise NotImplementedError
 
-    @classmethod
-    def _fromM21(cls, m21_obj: m21.pitch.Pitch | m21.interval.Interval) -> Self:
-        if m21_obj.__class__.__name__ == "Pitch":
-            return cls._fromM21Pitch(m21_obj)
-        elif m21_obj.__class__.__name__ == "Interval":
-            return cls._fromM21Interval(m21_obj)
-        else:
-            raise TypeError(f"Unsupported type: {m21_obj.__class__.__name__}")
-
     @property
     def step(self) -> int:
         """
@@ -901,12 +1117,6 @@ class PitchBase(PitchNotationBase):
         of octave pitch plus nominal octave times 7.
         """
         return self.opitch.step + self.o * 7
-
-    @property
-    @abstractmethod
-    def acci(self) -> Real:
-        """An accidental value in semitones that modifies the pitch."""
-        raise NotImplementedError
 
     @property
     @lru_cache
@@ -924,11 +1134,6 @@ class PitchBase(PitchNotationBase):
             return tone / 12
 
     @property
-    @abstractmethod
-    def opitch(self) -> OPitch:
-        raise NotImplementedError
-
-    @property
     def otone(self) -> Real:
         return self.tone % 12
 
@@ -939,7 +1144,7 @@ class PitchBase(PitchNotationBase):
 
         e.g. `Pitch("B+_0").o` and `Pitch("C-_0").o` are both `0`.
         """
-        return int(self.step // 7)
+        return self.step // 7
 
     @property
     def octave(self) -> int:
@@ -986,7 +1191,7 @@ class PitchBase(PitchNotationBase):
         **Note**: Here octave is the actual octave, not the nominal octave. To place a pitch `p`
         at a nominal octave `o`, call `fz.Pitch(p, o)` instead.
         """
-        return self.opitch.atOctave(octave)
+        return super().atOctave(octave)
 
     def isEnharmonic(self, other: Self) -> bool:
         return self.tone == other.tone
@@ -1056,18 +1261,20 @@ class PitchBase(PitchNotationBase):
         if isinstance(self, PitchNotation) and self.sgn < 0:
             p = -self
             neg = True
-            if rmode == "d" or rmode == "c":
+            if rmode == RMode.D or rmode == RMode.C:
                 rmode = RMode.F
-            elif rmode == "u" or rmode == "f":
+            elif rmode == RMode.U or rmode == RMode.F:
                 rmode = RMode.C
         else:
             p = self
             neg = False
-            if rmode == "d":
+            if rmode == RMode.D:
                 rmode = RMode.F
-            elif rmode == "u":
+            elif rmode == RMode.U:
                 rmode = RMode.C
-        acci_int = rdiv(p.acci, rmode=rmode, round=round)
+
+        tone_int = rdiv(p.tone, round=round, rmode=rmode)
+        acci_int = tone_int - cycGet(MAJOR_SCALE_TONES, p.step, 12)
         qual_int: int = clamp(-5, _qualMap(p.step, acci_int), 5)
         m21_specifier = _qual2Str_int(qual_int, augDimThresh=4)
         m21_diatonic = m21.interval.DiatonicInterval(
@@ -1094,31 +1301,30 @@ class PitchBase(PitchNotationBase):
         else:
             return self._m21_pitch(**kwargs)
 
+    def __copy__(self) -> Self:
+        return self
 
-class OPitchMeta(ABCMeta):
-    @cachedProp(key="_zero")
-    def ZERO(cls):
+    def __deepcopy__(self, memo) -> Self:
+        return self
+
+
+class OPitch(PitchBase, OEDOPitch["Pitch"]):
+    """
+    Represents a pitch in an octave, or equivalently, an interval no greater than an octave,
+    which is often referred to as a **pitch / interval class**.
+    """
+
+    __slots__ = ("_step", "_acci", "_hash")
+
+    @cachedClassProp(key="_zero")
+    def ZERO(cls) -> OPitch:
         """
         The C pitch, with no accidental, which is the identity element of addition in the
         octave pitch abelian group.
         """
         return cls._newHelper(0, 0)
 
-    @property
-    def C(cls):
-        return cls.ZERO
-
-
-class OPitch(OPitchNotation, PitchBase, metaclass=OPitchMeta):
-    """
-    Represents a pitch in an octave, or equivalently, an interval no greater than an octave,
-    which is often referred to as a **pitch / interval class**.
-    """
-
-    __match_args__ = ("step", "acci", "tone")
-    __slots__ = ("_step", "_acci", "_hash")
-
-    if t.TYPE_CHECKING:
+    if t.TYPE_CHECKING:  # pragma: no cover
 
         @overload
         def __new__(cls, src: str) -> Self:
@@ -1209,20 +1415,6 @@ class OPitch(OPitchNotation, PitchBase, metaclass=OPitchMeta):
             """
             ...
 
-    @classmethod
-    def co5(cls, n: int = 0) -> Self:
-        """
-        Returns the `n`-th pitch in circle of fifths order, starting from C.
-        positive `n` values means `n` perfect fifths up while negative `n` values means `n`
-        perfect fifths down. This method is equivalent to `OPitch("P5") * n`.
-
-        When `n` ranges from -7 to 7, this method yields the tonic of major scale with `abs(n)`
-        sharps (for positive `n`) or flats (for negative `n`).
-        """
-        step = n * 4 % 7
-        acci = (n + 1) // 7
-        return cls._newHelper(step, acci)
-
     def __new__(
         cls,
         arg1=_MISSING,
@@ -1250,10 +1442,12 @@ class OPitch(OPitchNotation, PitchBase, metaclass=OPitchMeta):
             if isinstance(arg1, PitchBase):
                 # another `PitchBase` object
                 return arg1.opitch
-            if arg1.__class__.__module__.startswith("music21."):
-                # `music21` object, pitch or interval
-                # since `music21` is a large library, we import it only when necessary
-                return cls._fromM21(arg1)
+            if lazyIsInstance(arg1, "music21.pitch.Pitch"):
+                # `music21` pitch
+                return cls._fromM21Pitch(arg1)
+            if lazyIsInstance(arg1, "music21.interval.Interval"):
+                # `music21` interval
+                return cls._fromM21Interval(arg1)
             # `step` only
             step = ostep(arg1)
             return cls._newHelper(step, 0)
@@ -1280,6 +1474,8 @@ class OPitch(OPitchNotation, PitchBase, metaclass=OPitchMeta):
         self._step = step
         self._acci = acci
         return self
+
+    _fromStepAndAcci = _newHelper
 
     @classmethod
     @lru_cache
@@ -1335,7 +1531,7 @@ class OPitch(OPitchNotation, PitchBase, metaclass=OPitchMeta):
         step = abs(m21_obj.generic.staffDistance) % 7
         cents = abs(m21_obj.cents)
         if cents.is_integer():
-            tone = Q(int(cents), 100)
+            tone = resolveInt(Q(int(cents), 100))
         else:
             tone = cents / 100
         result = cls._fromStepAndTone(step, tone)
@@ -1359,11 +1555,6 @@ class OPitch(OPitchNotation, PitchBase, metaclass=OPitchMeta):
         """
         return MAJOR_SCALE_TONES[self.step] + self.acci
 
-    @property
-    @lru_cache
-    def qual(self) -> Real:
-        return _qualMap(self.step, self.acci)
-
     def atOctave(self, octave: int = 0) -> Pitch:
         return Pitch._newHelper(self, octave - self.tone // 12)
 
@@ -1381,7 +1572,9 @@ class OPitch(OPitchNotation, PitchBase, metaclass=OPitchMeta):
         acci = self.tone - MAJOR_SCALE_TONES[step] - octave * 12
         return self._newHelper(step, acci)
 
-    def __add__(self, other: PitchBase) -> Self:
+    def __add__(self, other: Any) -> Self:
+        if not isinstance(other, PitchBase):
+            return NotImplemented
         step = self.step + other.step
         octave, step = divmod(step, 7)
         tone = self.tone + other.tone
@@ -1396,13 +1589,13 @@ class OPitch(OPitchNotation, PitchBase, metaclass=OPitchMeta):
         acci = tone - MAJOR_SCALE_TONES[step]
         return self._newHelper(step, acci)
 
-    def __mul__(self, other: int) -> Self:
+    def __mul__(self, other: Any) -> Self:
+        if not isinstance(other, Integral):
+            return NotImplemented
         if other == 0:
-            return self.__class__.C
+            return self.ZERO
         if other == 1:
             return self
-        if not isinstance(other, Integral):
-            raise TypeError(f"can only multiply by integers, got {type(other)}")
         step = self.step * other
         tone = self.tone * other
         octave, step = divmod(step, 7)
@@ -1412,44 +1605,31 @@ class OPitch(OPitchNotation, PitchBase, metaclass=OPitchMeta):
     def __abs__(self) -> Self:
         return self
 
-    def __str__(self) -> str:
-        return f"{STEP_NAMES[self.step]}{_acci2Str(self.acci)}"
-
     # def __format__(self, format_spec: str) -> str:
     #     base, options = format_spec.split(";", 1)
     #     options = options.split(",")
     #     print(base, options)
     #     return str(self)
 
-    def __repr__(self) -> str:
-        return f'{self.__class__.__name__}("{str(self)}")'
-
-    def __reduce__(self):
+    def __reduce__(self) -> tuple[Callable[..., Self], tuple[Any, ...]]:
         return (self._newImpl, (self.step, self.acci))
 
 
-class PitchMeta(ABCMeta):
-    @cachedProp
+class Pitch(PitchBase, EDOPitch[OPitch]):
+    """
+    Represents a pitch with specific octave, or an interval that may cross multiple octaves.
+    """
+
+    __slots__ = ("_opitch", "_o", "_hash")
+
+    @cachedClassProp(key="_zero")
     def ZERO(cls) -> Self:
         """
         The middle C pitch. It is the identity value of the pitch abelian group.
         """
         return cls._newHelper(OPitch.ZERO, 0)
 
-    @property
-    def C_0(cls) -> Self:
-        return cls.ZERO
-
-
-class Pitch(PitchNotation, PitchBase, metaclass=PitchMeta):
-    """
-    Represents a pitch with specific octave, or an interval that may cross multiple octaves.
-    """
-
-    __match_args__ = ("opitch", "o", "step", "acci", "tone")
-    __slots__ = ("_opitch", "_o", "_hash")
-
-    if t.TYPE_CHECKING:
+    if t.TYPE_CHECKING:  # pragma: no cover
         # constructors inherited from `OPitch` but has an additional keyword argument `o`
 
         @overload
@@ -1597,9 +1777,12 @@ class Pitch(PitchNotation, PitchBase, metaclass=PitchMeta):
             if isinstance(arg1, PitchBase):
                 # `OPitch` object
                 return cls._newHelper(arg1.opitch, 0)
-            if arg1.__class__.__module__.startswith("music21"):
-                # `music21` object, pitch or interval
-                return cls._fromM21(arg1)
+            if lazyIsInstance(arg1, "music21.pitch.Pitch"):
+                # `music21` pitch
+                return cls._fromM21Pitch(arg1)
+            if lazyIsInstance(arg1, "music21.interval.Interval"):
+                # `music21` interval
+                return cls._fromM21Interval(arg1)
 
             # `step` only
             step = _resolveStep(arg1)
@@ -1659,19 +1842,6 @@ class Pitch(PitchNotation, PitchBase, metaclass=PitchMeta):
         return result
 
     @classmethod
-    @lru_cache
-    def _newHelper(cls, opitch: OPitch, o: int) -> Self:
-        return cls._newImpl(opitch, o)
-
-    @classmethod
-    def _newImpl(cls, opitch: OPitch, o: int) -> Self:
-        """The fundamental constructor of `Pitch` class."""
-        self = super().__new__(cls)
-        self._opitch = opitch
-        self._o = o
-        return self
-
-    @classmethod
     def _fromM21Pitch(cls, m21_obj: m21.pitch.Pitch) -> Self:
         opitch = OPitch._fromM21Pitch(m21_obj)
         o = m21_obj.implicitOctave - 4
@@ -1680,8 +1850,11 @@ class Pitch(PitchNotation, PitchBase, metaclass=PitchMeta):
     @classmethod
     @lru_cache
     def _fromM21Interval(cls, m21_obj: m21.interval.Interval) -> Self:
-        # TODO))
-        raise NotImplementedError
+        step = m21_obj.generic.staffDistance
+        tone = m21_obj.chromatic.semitones
+        if not tone.is_integer() and (cents := m21_obj.chromatic.cents).is_integer():
+            tone = Q(int(cents), 100)
+        return cls._fromStepAndTone(step, tone)
 
     @property
     def opitch(self) -> OPitch:
@@ -1712,13 +1885,6 @@ class Pitch(PitchNotation, PitchBase, metaclass=PitchMeta):
     def qual(self) -> Real:
         return self.opitch.qual
 
-    @property
-    # @lru_cache
-    def sgn(self) -> Literal[-1, 0, 1]:
-        if self.step == 0:
-            return (self.acci > 0) - (self.acci < 0)
-        return (self.step > 0) - (self.step < 0)
-
     def interval(self, *, compound: bool = False, **kwargs):
         if self < self.__class__.C_0:  # negative interval
             return f"-{(-self).interval(compound=compound, **kwargs)}"
@@ -1736,7 +1902,9 @@ class Pitch(PitchNotation, PitchBase, metaclass=PitchMeta):
         acci = self.tone - MAJOR_SCALE_TONES[ostep] - octave * 12
         return self._newHelper(OPitch._newHelper(ostep, acci), octave)
 
-    def __add__(self, other: PitchBase) -> Self:
+    def __add__(self, other: Any) -> Self:
+        if not isinstance(other, PitchBase):
+            return NotImplemented
         step = self.step + other.step
         tone = self.tone + other.tone
         octave, ostep = divmod(step, 7)
@@ -1749,29 +1917,24 @@ class Pitch(PitchNotation, PitchBase, metaclass=PitchMeta):
         return self._newHelper(-self.opitch, -self.o - 1)
 
     def __mul__(self, other: int) -> Self:
+        if not isinstance(other, Integral):
+            return NotImplemented
         if other == 0:
             return self.C_0
         if other == 1:
             return self
-        if not isinstance(other, Integral):
-            raise TypeError(
-                f"can only multiply by integers, got {other.__class__.__name__}"
-            )
         step = self.step * other
         tone = self.tone * other
-        octave, ostep = divmod(step, 7)
-        acci = tone - MAJOR_SCALE_TONES[ostep] - octave * 12
-        return self._newHelper(OPitch._newHelper(ostep, acci), octave)
-
-    def __str__(self):
-        return f"{STEP_NAMES[self.opitch.step]}{_acci2Str(self.acci)}_{self.o}"
-
-    def __repr__(self):
-        return f"{self.__class__.__name__}({str(self)})"
+        o, ostep = divmod(step, 7)
+        acci = tone - MAJOR_SCALE_TONES[ostep] - o * 12
+        return self._newHelper(OPitch._newHelper(ostep, acci), o)
 
     @cachedGetter
     def __hash__(self) -> int:
         return hash((self.step, self.acci))
+
+    def __reduce__(self) -> tuple[Callable[..., Self], tuple[Any, ...]]:
+        return (self._newImpl, (self.opitch, self.o))
 
 
 def _modeAlter(
@@ -1799,7 +1962,7 @@ class Mode(Sequence[OPitch], Set[OPitch], metaclass=ABCMeta):
 
     __slots__ = ("_pitches", "_cyc", "_hash")
 
-    if t.TYPE_CHECKING:
+    if t.TYPE_CHECKING:  # pragma: no cover
 
         @overload
         def __new__(cls, pitches: Iterable[OPitch | int | str]) -> Self: ...
@@ -1827,14 +1990,18 @@ class Mode(Sequence[OPitch], Set[OPitch], metaclass=ABCMeta):
         def alter(self, acci: Iterable[Real]) -> Self: ...
 
     def __new__(cls, *args) -> Self:
-        if len(args) == 1 and isinstance(args[0], Iterable):
+        if (
+            len(args) == 1
+            and isinstance(args[0], Iterable)
+            and not isinstance(args[0], str)
+        ):
             pitches = args[0]
         else:
             pitches = args
         pitches = np.array([OPitch(p) for p in pitches])
         if pitches[0] != OPitch.ZERO:
             pitches -= pitches[0]
-        pitches.sort()
+        pitches[1:].sort()
         return cls._newHelper(pitches)
 
     @classmethod
@@ -2017,10 +2184,9 @@ class Mode(Sequence[OPitch], Set[OPitch], metaclass=ABCMeta):
     def __reversed__(self) -> Iterator[OPitch]:
         return reversed(self.pitches)
 
+    @cachedGetter
     def __hash__(self) -> int:
-        if not hasattr(self, "_hash"):
-            self._hash = hash(tuple(self.pitches))
-        return self._hash
+        return hash(tuple(self.pitches))
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, Mode):
@@ -2035,7 +2201,7 @@ class _ModeCyclicAccessor:
 
     __slots__ = ("_parent",)
 
-    if t.TYPE_CHECKING:
+    if t.TYPE_CHECKING:  # pragma: no cover
 
         @overload
         def __getitem__(self, key: int) -> OPitch: ...
@@ -2093,7 +2259,7 @@ class Scale(Sequence[OPitch], Set[OPitch]):
 
     __slots__ = ("_tonic", "_mode", "_cyc", "_pitches")
 
-    if t.TYPE_CHECKING:
+    if t.TYPE_CHECKING:  # pragma: no cover
 
         @overload
         def __getitem__(self, key: int) -> OPitch: ...
@@ -2196,7 +2362,7 @@ class _ScaleCyclicAccessor:
 
     __slots__ = ("_parent",)
 
-    if t.TYPE_CHECKING:
+    if t.TYPE_CHECKING:  # pragma: no cover
 
         @overload
         def __getitem__(self, key: int) -> OPitch: ...
@@ -2224,3 +2390,7 @@ class _ScaleCyclicAccessor:
         else:
             key %= len(self._parent.mode)
             return self._parent[key]
+
+
+oP = OPitch
+P = Pitch

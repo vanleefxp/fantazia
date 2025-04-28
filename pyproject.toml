@@ -14,11 +14,13 @@ classifiers = [
 keywords = ["music", "music theory", "notation", "tuning", "temperament"]
 dependencies = [
     "bidict>=0.23.1",
+    "gmpy2>=2.2.1",
     "numpy>=2.2.4",
     "pyrsistent>=0.20.0",
     "scikit-learn>=1.6.1",
     "scipy>=1.15.2",
     "sortedcontainers>=2.4.0",
+    "sympy>=1.14.0",
 ]
 
 [project.urls]
@@ -33,4 +35,4 @@ requires = ["setuptools >= 77.0.3"]
 build-backend = "setuptools.build_meta"
 
 [dependency-groups]
-dev = ["coverage>=7.8.0", "objprint>=0.3.0"]
+dev = ["coverage>=7.8.0", "esbonio>=0.16.5", "objprint>=0.3.0"]

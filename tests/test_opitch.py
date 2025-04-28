@@ -31,7 +31,7 @@ class TestOPitch(unittest.TestCase):
     def test_parse(self):
         # create `OPitch` from string representation
         testData = (
-            ("C", fz.OPitch.C, "C"),
+            ("C", fz.OPitch.ZERO, "C"),
             ("F+", fz.OPitch(3, 1), "F+"),
             ("G++", fz.OPitch(4, 2), "G++"),
             ("D+++", fz.OPitch(1, 3), "D+++"),
@@ -117,7 +117,7 @@ class TestOPitch(unittest.TestCase):
             self.assertEqual(-p2, p1)
             self.assertEqual(-(-p1), p1)
             self.assertEqual(-(-p2), p2)
-            self.assertEqual(p1 + p2, fz.OPitch.C)
+            self.assertEqual(p1 + p2, fz.OPitch.ZERO)
 
     def test_enharmonic(self):
         testData = map(
