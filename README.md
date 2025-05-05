@@ -11,7 +11,39 @@ Different from sophisticated and feature-rich [`music21`](https://github.com/cut
 
 ## Getting Started
 
-[TODO]
+```py
+import fantazia as fz
+
+# creating pitch objects
+
+# general pitch with no octave specification
+print(
+    fz.oP("C"),   # C
+    fz.oP("G"),   # G
+    fz.oP("F+"),  # F sharp
+    fz.oP("E-"),  # E flat
+    fz.oP("A--"), # A double flat
+    fz.oP("D++"), # D double sharp
+)
+# Output: C G F+ E- A-- D++
+
+# octave specific pitch
+print(
+    fz.P("C_0"),   # C in middle octave (middle C)
+    fz.P("F_1"),   # F at 1 octave higher from middle octave
+    fz.P("G_-1"),  # G at 1 octave lower from middle octave
+    fz.P("F+_2"),  # F sharp 2 octaves higher
+    fz.P("A-_-1"), # A flat 1 octave lower
+)
+# Output: C_0 F_1 G_-1 F+_2 A-_-1
+
+# pitch arithmetics
+
+print(
+    fz.oP("E") + fz.oP("E-"),
+    fz.oP("A") - fz.oP("D+"),
+)
+```
 
 ## Pitches / Intervals
 

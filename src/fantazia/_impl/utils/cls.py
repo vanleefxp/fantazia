@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from abc import ABCMeta
-from typing import overload, Callable, Any
+from typing import overload, Callable, Any, Never
 import typing as t
 import sys
 from functools import partial
 from threading import RLock
+from weakref import WeakSet
 
 __all__ = [
     "cachedProp",
@@ -84,15 +85,37 @@ class _cachedProp[T, P](property):
             return value
 
 
+_initCompleted = WeakSet()
+
+
 class ClassPropMeta(ABCMeta):
+    """
+    Metaclass for classes that have class properties defined by the `classProp` descriptor.
+
+    This metaclass ensures that class
+    properties are modified through the `classProp` descriptor instead of arbitrarily.
+    If the `classProp` descriptor does not have a setter defined, attempts to modify the
+    property will raise an `AttributeError`.
+    """
+
+    def __new__(mcls, name, bases, namespace, /, **kwargs):
+        cls = super().__new__(mcls, name, bases, namespace, **kwargs)
+        # mark the class as initialization completed to allow class property access
+        _initCompleted.add(cls)
+        return cls
+
     def __setattr__(cls, name: str, value: Any):
-        if isinstance(desc := vars(cls).get(name), classProp):
+        if isinstance(desc := cls.__dict__.get(name), classProp):
+            # call descriptor's `__set__` method when setting a class property
+            # any access prior to initialization completed might trigger `NotImplementedError`
+            # or `NameError`
             desc.__set__(cls, value)
         else:
             super().__setattr__(name, value)
 
     def __delattr__(cls, name: str):
-        if isinstance(desc := vars(cls).get(name), classProp):
+        if isinstance(desc := cls.__dict__.get(name), classProp):
+            # call descriptor's `__delete__` method when deleting a class property
             desc.__delete__(cls)
         else:
             super().__delattr__(name)
@@ -108,7 +131,7 @@ class classProp[T, P](property):
     removed in 3.13](https://docs.python.org/3.13/library/functions.html#classmethod). However,
     in some occasions, it is still useful to have a class-level property that can be extended
     and overridden to convey instance-irrelevant information about the class. This `classProp`
-    descriptor allows for the definition of such properties.
+    descriptor provides a way to define such properties.
 
     For a class to have class properties, its metaclass must be set to `ClassPropMeta` (or its
     subtype) so that illegal modifications to class properties can be detected.
@@ -124,25 +147,34 @@ class classProp[T, P](property):
         super().__init__(fget, fset, fdel, doc)
 
     def __get__(self, instance: T | None, owner: type[T] = None) -> P:
-        if owner is None:
-            owner = instance.__class__
+        # if owner is None:
+        #     owner = instance.__class__
 
-        # The following line is crucial for the program to work.
-        # If removed, `NotImplementedError` from abstract class properties will be triggered
-        # unexpectedly.
-        # From current analysis, the problem is related to the `_abc__abc_init` function in
-        # CPython's `_abc.c` module.
-        #
-        # Python version: 3.13.3
-        getattr(owner, "__abstractmethods__")
+        # # The following line is crucial for the program to work.
+        # # If removed, `NotImplementedError` from abstract class properties will be triggered
+        # # unexpectedly.
+        # #
+        # # From current analysis, the problem is related to the `_abc__abc_init` function in
+        # # CPython's `_abc.c` module.
+        # #
+        # # Python version: 3.13.3
+        # getattr(owner, "__abstractmethods__")
 
+        # return self.fget(owner)
+
+        # initialization is not completed yet
+        # accessing might trigger `NotImplementedError` for abstract methods
+        # or `NameError` if the class property refers to a variable defined later on
+        # so just return the original function
+        if owner not in _initCompleted:
+            return self.fget
         return self.fget(owner)
 
     def __set_name__(self, owner: type[T], name: str):
         if not isinstance(owner, ClassPropMeta):
             raise TypeError(
-                f"Class {owner.__name__} must use {ClassPropMeta.__name__} (or its subtype) as "
-                "metaclass to have class properties."
+                f"Class {owner.__name__} must use {ClassPropMeta.__name__} (or its subtype) "
+                "as metaclass to have class properties."
             )
         super().__set_name__(owner, name)
         self._cls = owner
@@ -311,3 +343,11 @@ def singleton(arg1=None, *, key=_DUMMY):
         return partial(_singleton, key=key)
     else:
         return _singleton(arg1)
+
+
+def noInstance[T](cls: type[T]) -> type[T]:
+    def __new__(cls, *args, **kwargs) -> Never:
+        raise TypeError(f"Cannot instantiate {cls.__name__} class")
+
+    cls.__new__ = __new__
+    return cls

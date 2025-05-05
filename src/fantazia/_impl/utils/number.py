@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Sequence, Callable, Iterable, Iterator, Mapping
+from collections import Counter
 import typing as t
-from typing import overload, Literal, Callable, Iterable, Self
+from typing import overload, Literal, Self
 from enum import StrEnum
 from bisect import bisect_left
 from numbers import Number, Real, Rational
@@ -10,6 +11,8 @@ from fractions import Fraction as Q
 from math import inf, nan
 from functools import reduce
 import operator as op
+import itertools as it
+import sys
 
 from .cls import singleton
 
@@ -61,6 +64,18 @@ if t.TYPE_CHECKING:
 
     @overload
     def qdiv(a: Real, b: Real) -> Real: ...
+
+    @overload
+    def pf2Rational(*pows: int) -> Q: ...
+
+    @overload
+    def pf2Rational(pows: Iterable[int] | Mapping[int, int]) -> Q: ...
+
+    @overload
+    def minmax[T: SupportsRichComparison](*items: T) -> tuple[T, T]: ...
+
+    @overload
+    def minmax[T: SupportsRichComparison](items: Iterable[T]) -> tuple[T, T]: ...
 
 
 def nextPow2(
@@ -494,3 +509,111 @@ def nthPrime(n: int) -> int:
 
 def prod[T: SupportsMul](seq: Iterable[T], *, start: T = 1) -> T:
     return reduce(op.mul, seq, start)
+
+
+def alternateSignInts() -> Iterator[int]:
+    """
+    Generates the sequence 0, 1, -1, 2, -2, ... This demonstrates how the set of integers
+    has the same cardinality as the set of natural numbers.
+    """
+    yield 0
+    for i in it.count(1):
+        yield i
+        yield -i
+
+
+def pf2Rational(arg0, *args):
+    """
+    Convert the prime factorization of a rational number to its fraction representation.
+    """
+    if isinstance(arg0, Mapping):
+        n = d = 1
+        for prime, pow in arg0.items():
+            if pow > 0:
+                n *= prime**pow
+            elif pow < 0:
+                d *= prime**-pow
+        return Q(n, d)
+
+    if isinstance(arg0, Iterable):
+        pows = arg0
+    else:
+        pows = it.chain((arg0,), args)
+    n = d = 1
+    for pow, prime in zip(pows, primes()):
+        if pow > 0:
+            n *= prime**pow
+        elif pow < 0:
+            d *= prime**-pow
+    return Q(n, d)
+
+
+def _primeFactors(num: Rational) -> Counter[int]:
+    from primefac import primefac
+
+    pf = Counter(primefac(num.numerator))
+    pf.subtract(primefac(num.denominator))
+    return pf
+
+
+if "sympy" in sys.modules:
+    # use `sympy`'s factorization function if available
+    _sympy_factorrat = sys.modules["sympy"].factorrat
+    _sympy_rational = sys.modules["sympy"].Rational
+
+    def _primeFactors(num: Rational) -> Counter[int]:
+        return Counter(_sympy_factorrat(_sympy_rational(num)))
+
+
+def primeFactors(arg0, *args) -> Counter[int]:
+    """
+    Factorize a rational number into powers of prime.
+    """
+
+    if isinstance(arg0, Mapping):
+        pf = Counter()
+        for k, v in arg0.items():
+            pf_k = _primeFactors(k)
+            for k1, v1 in pf_k.items():
+                pf[k1] += v * v1
+        return pf
+    elif isinstance(arg0, Iterable):
+        pf = Counter()
+        for num in arg0:
+            pf.update(_primeFactors(num))
+        return pf
+    pf = _primeFactors(arg0)
+    for num in args:
+        pf.update(_primeFactors(num))
+    return pf
+
+
+def minmax(arg0, *args):
+    if len(args) == 0 and isinstance(arg0, Iterable):
+        itr = iter(arg0)
+        min_item = max_item = next(itr)
+        for item in itr:
+            if item < min_item:
+                min_item = item
+            elif item > max_item:
+                max_item = item
+        return min_item, max_item
+
+    min_item = max_item = arg0
+    for item in args:
+        if item < min_item:
+            min_item = item
+        elif item > max_item:
+            max_item = item
+    return min_item, max_item
+
+
+def resolveNpType(num):
+    import numpy as np
+
+    if num.is_integer():
+        return int(num)
+    elif isinstance(num, np.floating):
+        return float(num)
+    else:
+        return num
