@@ -12,6 +12,7 @@ from numbers import Integral, Real
 from typing import Self, overload, Any, Literal
 from fractions import Fraction as Q
 import math
+import warnings
 
 import numpy as np
 from sortedcontainers import SortedSet
@@ -22,7 +23,6 @@ if t.TYPE_CHECKING:  # pragma: no cover
     import music21 as m21  # pragma: no cover
 
 from .utils.cls import (
-    cachedProp,
     cachedClassProp,
     cachedGetter,
     lazyIsInstance,
@@ -40,7 +40,7 @@ from .utils.number import (
     qdiv,
 )
 from .utils.collection import updated, cycGet
-from .math import AbelianElement
+from ._math import AbelianElement
 
 # TODO)) put utils in a separate library
 
@@ -741,6 +741,25 @@ class _DegMapPitchesView(Sequence["OPitch"], Set["OPitch"]):
         return np.array([self._getItem(k) for k in key], dtype=object)
 
 
+class NewHelperMixin(metaclass=ABCMeta):
+    @classmethod
+    @lru_cache
+    def _newHelper(cls, *args, **kwargs) -> Self:
+        """
+        `_newHelper` is the cached version of `_newImpl`
+        """
+        return cls._newImpl(*args, **kwargs)
+
+    @classmethod
+    @abstractmethod
+    def _newImpl(cls, *args, **kwargs) -> Self:
+        """
+        The fundamental method of creating a new instance of the current class, which all
+        other constructors of this class depends on.
+        """
+        raise NotImplementedError
+
+
 class PitchNotationBase[
     OPType: "OPitchNotation"[PType],
     PType: "PitchNotation"[OPType],
@@ -769,14 +788,14 @@ class PitchNotationBase[
         at least one of the `pos` or `freq` property. Otherwise, the default implementation
         will result in infinite recursion.
         """
-        return math.log2(self.freq)
+        return math.log2(float(self.freq))
 
     @property
     def freq(self) -> Real:
         """
         Frequency of the pitch relative to middle C.
         """
-        return 2**self.pos
+        return 2 ** float(self.pos)
 
     @property
     def opos(self) -> Real:
@@ -829,17 +848,13 @@ class OPitchNotation[PType: "PitchNotation"](PitchNotationBase[Self, PType]):
         return self.pos % 1 == other.pos % 1
 
 
-class PitchNotation[OPType: OPitchNotation](PitchNotationBase[OPType, Self]):
+class PitchNotation[OPType: OPitchNotation](
+    PitchNotationBase[OPType, Self], NewHelperMixin
+):
     __slots__ = ()
 
     @classmethod
-    @lru_cache
-    def _newHelper(cls, opitch: OPType, o: int) -> Self:
-        return cls._newImpl(opitch, o)
-
-    @classmethod
     def _newImpl(cls, opitch: OPType, o: int) -> Self:
-        """The fundamental constructor of `Pitch` class."""
         self = super().__new__(cls)
         self._opitch = opitch
         self._o = o
@@ -894,14 +909,19 @@ class DiatonicPitchBase[OPType: "ODiatonicPitch", PType: "DiatonicPitch"](
 
 
 class ODiatonicPitch[PType: "DiatonicPitch"](
-    OPitchNotation[PType], DiatonicPitchBase[Self, PType]
+    OPitchNotation[PType], DiatonicPitchBase[Self, PType], NewHelperMixin
 ):
     __slots__ = ()
 
     @classmethod
-    @abstractmethod
+    def _newImpl(self, step: int, acci: Real) -> Self:
+        self._step = step
+        self._acci = acci
+        return self
+
+    @classmethod
     def _fromStepAndAcci(self, step: int, acci: Real) -> Self:
-        raise NotImplementedError
+        return self._newHelper(step, acci)
 
     @classmethod
     def co5(cls, n: int = 0) -> Self:
@@ -959,19 +979,33 @@ class EDOPitchBase[OPType: "OEDOPitch", PType: "EDOPitch"](
 
     @classProp
     @abstractmethod
-    def edo(cls) -> Integral:
+    def edo(cls) -> int:
+        """
+        Number of equal divisions of the octave.
+        """
         raise NotImplementedError
 
     @cachedClassProp
-    def fifthSize(cls) -> Integral:
-        return round(np.log2(1.5) * cls.edo)
+    def fifthSize(cls) -> int:
+        """
+        Number of EDO steps corresponding to a perfect fifth (P5) interval.
+        """
+        return round(math.log2(1.5) * cls.edo)
 
     @cachedClassProp
-    def sharpness(cls) -> Integral:
+    def sharpness(cls) -> int:
+        """
+        Number of EDO steps a sharp sign raises.
+
+        **See**: <https://en.xen.wiki/w/Sharpness>
+        """
         return cls.fifthSize * 7 - cls.edo * 4
 
     @cachedClassProp
     def diatonic(cls) -> Sequence[Integral]:
+        """
+        A sequence denoting mapping from diatonic steps to EDO steps.
+        """
         res = np.arange(-1, 6) * cls.fifthSize - cls.edo * (np.arange(-1, 6) // 2)
         res = res[np.arange(1, 14, 2) % 7]
         res.flags.writeable = False
@@ -1304,6 +1338,8 @@ class OPitch(PitchBase, OEDOPitch["Pitch"]):
     """
 
     __slots__ = ("_step", "_acci", "_hash")
+    _step: int
+    _acci: Real
 
     @cachedClassProp(key="_zero")
     def ZERO(cls) -> OPitch:
@@ -1356,21 +1392,21 @@ class OPitch(PitchBase, OEDOPitch["Pitch"]):
             ...
 
         @overload
-        def __new__(cls, m21_pitch: m21.pitch.Pitch) -> Self:
+        def __new__(cls, m21_obj: m21.pitch.Pitch | m21.interval.Interval) -> Self:
             """
-            Convert a `music21.pitch.Pitch` object to an `OPitch` object.
+            Convert a `music21` pitch or interval object to an `OPitch` object.
             """
             ...
 
         @overload
-        def __new__(cls, step: int | str, acci: Real | str = 0) -> Self:
+        def __new__(cls, step: Integral | str, acci: Real | str = 0) -> Self:
             """
             Creates a new `OPitch` object from step and accidental values.
             """
             ...
 
         @overload
-        def __new__(cls, step: int | str, *, tone: Real | PitchBase) -> Self:
+        def __new__(cls, step: Integral | str, *, tone: Real | PitchBase) -> Self:
             """
             Creates a new `OPitch` object from a step and a chromatic tone.
 
@@ -1397,6 +1433,7 @@ class OPitch(PitchBase, OEDOPitch["Pitch"]):
         cls,
         arg1=_MISSING,
         arg2=_MISSING,
+        /,
         *,
         tone=_MISSING,
         acciPref=AcciPrefs.CLOSEST_FLAT_F_SHARP,
@@ -1420,7 +1457,7 @@ class OPitch(PitchBase, OEDOPitch["Pitch"]):
             if isinstance(arg1, PitchBase):
                 # another `PitchBase` object
                 return arg1.opitch
-            if isinstance(arg1, WrappedPitchBase):
+            if isinstance(arg1, PitchWrapperBase):
                 return arg1.opitch._p
             if isinstance(arg1, DiatonicPitchBase):
                 return cls._newHelper(arg1.opitch.step, arg1.acci)
@@ -1491,7 +1528,9 @@ class OPitch(PitchBase, OEDOPitch["Pitch"]):
     @lru_cache
     def _fromM21Pitch(cls, m21_obj: m21.pitch.Pitch):
         step = (ord(m21_obj.step) - 67) % 7  # 67 is the ASCII code of 'C'
-        acci = 0 if m21_obj.accidental is None else resolveInt(m21_obj.accidental.alter)
+        acci: Real = (
+            0 if m21_obj.accidental is None else resolveInt(m21_obj.accidental.alter)
+        )
         if not acci.is_integer():
             acci = Q(acci)  # quartertonal accidental
         microtoneCents = resolveInt(m21_obj.microtone.cents)
@@ -1499,7 +1538,7 @@ class OPitch(PitchBase, OEDOPitch["Pitch"]):
             if microtoneCents.is_integer():
                 acci += Q(microtoneCents, 100)
             else:
-                acci += m21_obj.microtone.alter
+                acci += float(m21_obj.microtone.alter)
         return cls._newHelper(step, acci)
 
     @classmethod
@@ -1599,6 +1638,8 @@ class Pitch(PitchBase, EDOPitch[OPitch]):
     """
 
     __slots__ = ("_opitch", "_o", "_hash")
+    _opitch: OPitch
+    _o: int
 
     @cachedClassProp(key="_zero")
     def ZERO(cls) -> Self:
@@ -1611,21 +1652,31 @@ class Pitch(PitchBase, EDOPitch[OPitch]):
         # constructors inherited from `OPitch` but has an additional keyword argument `o`
 
         @overload
-        def __new__(cls, src: str, *, o: int) -> Self:
+        def __new__(
+            cls,
+            src: str | DiatonicPitchBase | m21.pitch.Pitch | m21.interval.Interval,
+            /,
+            *,
+            o: Integral,
+        ) -> Self:
             """
             Equivalent to `Pitch(OPitch(src), o=o)`.
             """
             ...
 
         @overload
-        def __new__(cls, step: int | str, acci: Real | str = 0, *, o: int) -> Self:
+        def __new__(
+            cls, step: Integral | str, acci: Real | str = 0, /, *, o: Integral
+        ) -> Self:
             """
             Equivalent to `Pitch(OPitch(step, acci), o=o)`.
             """
             ...
 
         @overload
-        def __new__(cls, step: int | str, *, tone: Real | PitchBase, o: int) -> Self:
+        def __new__(
+            cls, step: Integral | str, /, *, tone: Real | PitchBase, o: Integral
+        ) -> Self:
             """
             Eauivalent to `Pitch(OPitch(step, tone=tone), o=o)`.
             """
@@ -1634,6 +1685,7 @@ class Pitch(PitchBase, EDOPitch[OPitch]):
         @overload
         def __new__(
             cls,
+            /,
             *,
             tone: Real | PitchBase,
             acciPref: AcciPref = AcciPrefs.CLOSEST_FLAT_F_SHARP,
@@ -1667,14 +1719,14 @@ class Pitch(PitchBase, EDOPitch[OPitch]):
             ...
 
         @overload
-        def __new__(cls, opitch: OPitch, *, o: int = 0) -> Self:
+        def __new__(cls, opitch: OPitch, /, *, o: int = 0) -> Self:
             """
             Creates a `Pitch` object by putting an `OPitch` into a specific *nominal* octave.
             """
             ...
 
         @overload
-        def __new__(cls, step: int | str, acci: Real | str = 0) -> Self:
+        def __new__(cls, step: int | str, acci: Real | str = 0, /) -> Self:
             """
             Creates a `Pitch` object from a step and an accidental. The step value is octave
             sensitive.
@@ -1684,15 +1736,7 @@ class Pitch(PitchBase, EDOPitch[OPitch]):
             ...
 
         @overload
-        def __new__(cls, deg: PitchBase, acci: Real | str = 0) -> Self:
-            """
-            Creates a `Pitch` object from a degree and an accidental. If the degree object
-            already has an accidental, it will be added to the given `acci` value.
-            """
-            ...
-
-        @overload
-        def __new__(cls, step: int | str, *, tone: Real | PitchBase) -> Self:
+        def __new__(cls, step: int | str, /, *, tone: Real | PitchBase) -> Self:
             """
             Creates a `Pitch` object from a step and a chromatic tone. Both the step and tone
             are octave sensitive.
@@ -1705,6 +1749,7 @@ class Pitch(PitchBase, EDOPitch[OPitch]):
         @overload
         def __new__(
             cls,
+            /,
             *,
             tone: Real | PitchBase,
             acciPref: AcciPref = AcciPrefs.CLOSEST_FLAT_F_SHARP,
@@ -1719,21 +1764,29 @@ class Pitch(PitchBase, EDOPitch[OPitch]):
         cls,
         arg1=_MISSING,
         arg2=_MISSING,
+        /,
         *,
         o=_MISSING,
         tone=_MISSING,
-        acciPref=AcciPrefs.CLOSEST_FLAT_F_SHARP,
+        acciPref=_MISSING,
     ) -> Self:
         if o is not _MISSING:
             # call `OPitch` constructor with other arguments except `o`
             opitch = OPitch(arg1, arg2, tone=tone, acciPref=acciPref)
+            o = int(o)
             return cls._newHelper(opitch, o)
 
         if arg2 is _MISSING:
             if arg1 is _MISSING:
                 # `tone` and `acciPref`
+                if acciPref is _MISSING:
+                    acciPref = AcciPrefs.CLOSEST_FLAT_F_SHARP
                 tone = _resolveTone(tone)
                 return cls._fromTone(tone, acciPref)
+            if acciPref is not _MISSING:
+                warnings.warn(
+                    "`acciPref` is ignored when at least one positional argument is given."
+                )
             if tone is not _MISSING:
                 # `step` and `tone`
                 step = _resolveStep(arg1)
@@ -1745,12 +1798,10 @@ class Pitch(PitchBase, EDOPitch[OPitch]):
             if isinstance(arg1, Pitch):
                 # another `Pitch` object
                 return arg1
-            if isinstance(arg1, WrappedPitch):
-                return arg1.opitch._p
             if isinstance(arg1, PitchBase):
                 # `OPitch` object
                 return cls._newHelper(arg1.opitch, 0)
-            if isinstance(arg1, WrappedPitchBase):
+            if isinstance(arg1, PitchWrapperBase):
                 return cls._newHelper(arg1.opitch._p, 0)
             if isinstance(arg1, DiatonicPitchBase):
                 return cls._fromStepAndAcci(arg1.step, arg1.acci)
@@ -1764,6 +1815,11 @@ class Pitch(PitchBase, EDOPitch[OPitch]):
             # `step` only
             step = _resolveStep(arg1)
             return cls._fromStepAndAcci(step, 0)
+
+        if tone is not _MISSING or acciPref is not _MISSING:
+            warnings.warn(
+                "`tone` and`acciPref` are ignored when `step` and `acci` are given."
+            )
 
         # `step` and `acci`
         step = _resolveStep(arg1)
@@ -1797,12 +1853,12 @@ class Pitch(PitchBase, EDOPitch[OPitch]):
         if not src[-1].isdigit():
             # octave not specified, assume octave 0
             opitch = OPitch._parse(src)
-            octave = 0
+            o = 0
         else:
-            opitch, octave = src.rsplit("_", 1)
+            opitch, o = src.rsplit("_", 1)
             opitch = OPitch._parsePitch(opitch)
-            octave = int(octave)
-        return Pitch._newHelper(opitch, octave)
+            o = int(o)
+        return Pitch._newHelper(opitch, o)
 
     @classmethod
     def _parseInterval(cls, src: str) -> Self:
@@ -1898,33 +1954,14 @@ class Pitch(PitchBase, EDOPitch[OPitch]):
         return (self._newImpl, (self.opitch, self.o))
 
 
-class WrappedPitchBase[OPType: "OWrappedPitch", PType: "WrappedPitch"](
+class PitchWrapperBase[OPType: "OPitchWrapper", PType: "PitchWrapper"](
     DiatonicPitchBase[OPType, PType]
 ):
     """Helper type for wrapping a `PitchBase` with a different type."""
 
-    @classmethod
-    @lru_cache
-    def _newHelper(cls, p: PitchBase) -> Self:
-        return cls._newImpl(p)
-
-    @classmethod
-    def _newImpl(cls, p: PitchBase) -> Self:
-        self = super().__new__(cls)
-        self._p = p
-        return self
-
-    @property
-    def step(self) -> int:
-        return self._p.step
-
     @property
     def acci(self) -> Real:
-        return self._p.acci
-
-    @cachedProp
-    def opitch(self) -> OPType:
-        return self.opitchType._newHelper(self._p.opitch)
+        return self.opitch.acci
 
     def __add__(self, other: Any) -> Self:
         if not isinstance(other, self.__class__):
@@ -1945,9 +1982,17 @@ class WrappedPitchBase[OPType: "OWrappedPitch", PType: "WrappedPitch"](
         return (self._newHelper, (self._p,))
 
 
-class OWrappedPitch[PType: "WrappedPitch"](
-    WrappedPitchBase[Self, PType], ODiatonicPitch[PType]
+class OPitchWrapper[PType: "PitchWrapper"](
+    PitchWrapperBase[Self, PType], ODiatonicPitch[PType]
 ):
+    _p: OPitch
+
+    @classmethod
+    def _newImpl(cls, p: OPitch) -> Self:
+        self = super().__new__(cls)
+        self._p = p
+        return self
+
     @cachedClassProp(key="_zero")
     def ZERO(cls) -> Self:
         return cls._newHelper(OPitch.ZERO)
@@ -1963,30 +2008,20 @@ class OWrappedPitch[PType: "WrappedPitch"](
         return cls._newHelper(OPitch._fromStepAndAcci(step, acci))
 
     @property
-    def opitch(self) -> Self:
-        return self
+    def step(self) -> int:
+        return self._p.step
 
     @property
-    def o(self) -> int:
-        return 0
+    def acci(self) -> int:
+        return self._p.acci
 
 
-class WrappedPitch[OPType: OWrappedPitch](
-    WrappedPitchBase[OPType, Self], DiatonicPitch[OPType]
+class PitchWrapper[OPType: OPitchWrapper](
+    PitchWrapperBase[OPType, Self], DiatonicPitch[OPType]
 ):
     @cachedClassProp(key="_zero")
     def ZERO(cls) -> Self:
-        return cls._newHelper(Pitch.ZERO)
-
-    @classmethod
-    def _newImpl(cls, p: Pitch) -> Self:
-        self = super().__new__(cls)
-        self._p = p
-        return self
-
-    @property
-    def o(self) -> int:
-        return self._p.o
+        return cls._newHelper(cls.opitchType.ZERO)
 
 
 def _modeAlter(

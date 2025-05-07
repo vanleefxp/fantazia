@@ -205,8 +205,9 @@ def cachedProp(arg1=None, *args, **kwargs):
     """
     A cached property decorator that caches the result of the property on the instance.
     The cached value is stored, by default, in a private attribute with the same name as the
-    property preceded by a leading underscore, or, when a key is specified, with the key as
-    the attribute name. On successive calls, the cached value is returned.
+    property preceded by a leading underscore (e.g. `myprop` to `_myprop`), or, when a key is
+    specified, with the key as the attribute name. On successive calls, the cached value is
+    returned.
 
     **Note**: This works differently from the `@cached_property` decorator in `functools`,
     which relies on the `__dict__` attribute of the instance to store cached value and is thus
@@ -346,6 +347,12 @@ def singleton(arg1=None, *, key=_DUMMY):
 
 
 def noInstance[T](cls: type[T]) -> type[T]:
+    """
+    Declare that a class, usually a helper class that serves as a container of functions /
+    static methods, cannot be instantiated. An error will be raised when an attempt is made
+    to create an instance of the class.
+    """
+
     def __new__(cls, *args, **kwargs) -> Never:
         raise TypeError(f"Cannot instantiate {cls.__name__} class")
 

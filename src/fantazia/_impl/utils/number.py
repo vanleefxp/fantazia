@@ -495,7 +495,7 @@ def primes(start: int = 2) -> Iterable[int]:
     n = start
     while True:
         yield n
-        n = next_prime(n)
+        n = int(next_prime(n))
 
 
 def nthPrime(n: int) -> int:
@@ -565,6 +565,16 @@ if "sympy" in sys.modules:
         return Counter(_sympy_factorrat(_sympy_rational(num)))
 
 
+def _cleanZeroes(pf: Counter[int]) -> Counter[int]:
+    """
+    Remove all zero powers from the prime factorization.
+    """
+    for k, v in tuple(pf.items()):
+        if v == 0:
+            del pf[k]
+    return pf
+
+
 def primeFactors(arg0, *args) -> Counter[int]:
     """
     Factorize a rational number into powers of prime.
@@ -576,16 +586,23 @@ def primeFactors(arg0, *args) -> Counter[int]:
             pf_k = _primeFactors(k)
             for k1, v1 in pf_k.items():
                 pf[k1] += v * v1
-        return pf
     elif isinstance(arg0, Iterable):
         pf = Counter()
         for num in arg0:
             pf.update(_primeFactors(num))
-        return pf
-    pf = _primeFactors(arg0)
-    for num in args:
-        pf.update(_primeFactors(num))
-    return pf
+    else:
+        pf = _primeFactors(arg0)
+        for num in args:
+            pf.update(_primeFactors(num))
+    return _cleanZeroes(pf)
+
+
+def powerOf(num: Rational, base: Rational) -> int:
+    p = 0
+    while num % base == 0:
+        num //= base
+        p += 1
+    return p
 
 
 def minmax(arg0, *args):
