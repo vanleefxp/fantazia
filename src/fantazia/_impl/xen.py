@@ -222,7 +222,6 @@ def co5_p2_p3(step: Integral, acci: Integral) -> tuple[int, int]:
     # an alternative way to get `p2`:
     # q, r = divmod(p3, 7)
     # p2 = -(r * 3 // 2) - q * 11 + o
-    print(p3, p2, o, ostep)
     return p2, p3
 
 

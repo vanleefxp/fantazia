@@ -4,17 +4,14 @@
 
 `fantazia` is a Python library for *math-based* music theory computation.
 
-Different from sophisticated and feature-rich [`music21`](https://github.com/cuthbertLab/music21) which provides a comprehensive music analysis toolkit, the target of `fantazia` is to *regularize music computations by mathematic rules*. The music related types in `fantazia` do not contain more information than necessary as an abstraction (like color and display style), and are immutable. Support for conversion to `music21` types is currently implemented only for pitch objects.
+Different from sophisticated and feature-rich [`music21`](https://github.com/cuthbertLab/music21) which provides a comprehensive music analysis toolkit, the target of `fantazia` is to *regularize music computations by mathematic rules*. The music related types in `fantazia` do not contain more information than necessary as an abstraction (like color and display style, which are kept in `music21` objects), and are immutable (`music21` objects are mutable). Support for conversion to and from `music21` types is currently implemented only for pitch objects.
 
 > The package is currently under development and not yet distributed to PyPI. You may download the `.whl` or `.tar.gz` distribution file in the `dist` sub-directory and install from it to have a try.
 
-
-## Getting Started
+## Pitches / Intervals
 
 ```py
 import fantazia as fz
-
-# creating pitch objects
 
 # general pitch with no octave specification
 print(
@@ -30,207 +27,141 @@ print(
 # octave specific pitch
 print(
     fz.P("C_0"),   # C in middle octave (middle C)
+    fz.P("E-"),    # E flat in middle octave (octave symbol omitted)
     fz.P("F_1"),   # F at 1 octave higher from middle octave
     fz.P("G_-1"),  # G at 1 octave lower from middle octave
     fz.P("F+_2"),  # F sharp 2 octaves higher
     fz.P("A-_-1"), # A flat 1 octave lower
 )
-# Output: C_0 F_1 G_-1 F+_2 A-_-1
+# Note: middle octave is octave 0
+# Output: C_0 E-_0 F_1 G_-1 F+_2 A-_-1
+```
 
-# pitch arithmetics
+`fantazia` provides two main pitch / interval types, which are `OPitch` (or abbreviated as `oP`), standing for a **general pitch** with no octave specification, and `Pitch` (`P`), representing a **specific pitch** in a specific octave. These two pitch types can be created from string notations.
 
+Unlike `music21`, `fantazia` do not distinguish between pitchs and intervals by two different types. Any pitch object can also be also regarded as an interval starting from middle C.
+
+
+### Pitch / Interval Properties
+
+```py
+import fantazia as fz
+
+# general pitch
+p1 = fz.oP("F+")
 print(
-    fz.oP("E") + fz.oP("E-"),
-    fz.oP("A") - fz.oP("D+"),
+    p1.step, # diatonic step as an integer between 0 and 6
+    p1.acci, # accidental, a real number notating chromatic tone change
+    p1.tone, # chromatic tone in an octave (maps an octave to [0, 12))
+    p1.freq, # frequency relative to C (C as 1)
 )
-```
+# Output: 3 1 6 1.4142135623730951
 
-## Pitches / Intervals
-
-`fantazia` provides two main pitch / interval types, which are `OPitch`, standing for a **general pitch** with no octave specification, and `Pitch`, representing a **specific pitch** in a specific octave.
-
-Unlike `music21`, `fantazia` do not create separated types for pitches and intervals, because a pitch can also be regarded as an interval from the origin, middle C. This makes the arithmetics of pitch objects more convenient and consistent.
-
-> This consideration has an analogy with points and vectors in Euclidean space, where a point can also be regarded as a vector starting from origin. Choosing not to distinguish between vectors and points by two different classes in programming is thus more convenient for the implementation of vector arithmetics.
-
-
-### Creating Pitch / Interval Objects
-
-
-#### `OPitch`: General Pitch Type
-
-The simplest method to create an `OPitch` object is to call `OPitch()` constructor, or its equivalent abbreviation, `oP()`, with a notation string, such as `C`, `F+`, `E-`, etc.
-
-```py
-import fantazia as fz
-print(fz.oP("C"), fz.oP("F+"), fz.oP("E-"))
-# C F+ E-
-```
-
-A notation string consists of a step name and, a symbolic representation of accidental, if any.
-
-A valid step name includes:
-
-* a letter among `C`, `D`, `E`, `F`, `G`, `A`, `B`
-* a solfège name among `do` / `ut`, `re`, `mi`, `fa`, `sol`, `la`, `si` / `ti`
-* a degree value among `1`, `2`, `3`, `4`, `5`, `6`, `7` (note that in string representation, counting starts from one instead of zero as in the tradition of music theory)
-
-A symbolic accidental can be:
-
-* a combination of `+` and `-` signs, where `+` stands for sharp (&sharp;) and `-` for flat (&flat;). In this sense, `++` represents double sharp (&#x1d12a;) and `--` is for double flat (&#x1d12b;).
-* A numeric value, in the form of an integer, decimal or fraction, preceded by a `+` or `-`, and wrapped in square brackets. (to support microtonal notation and simplify multiple accidentals. *e.g.* `[+1/2]`, `[-0.5]`, `[+4]`)
-
-```python
-import fantazia as fz
-
-pitches = map(
-    fz.OPitch,
-    ("C", "F+", "e-", "G++", "A--", "re+", "7-")
+# specific pitch
+p2 = fz.P("F+_2")
+print(
+    p2.opitch, # general pitch without octave specification
+    p2.o,      # the octave this pitch is located in (middle octave is 0)
+    p2.step,   # equals to `p2.opitch.step + p2.o * 7`
+    p2.acci,   # equals to `p2.opitch.acci`
+    p2.tone,   # equals to `p2.opitch.tone + p2.o * 12`
+    p2.freq,   # equals to `p2.opitch.freq * 2**p2.o`
 )
-print(" ".join(map(str, pitches)))
-# C F+ E- G++ A-- D+ B-
+# Output: F+ 2 17 1 30 5.656854249492381
 ```
 
-> This notation rule is inspired by the syntax of [Alda](https://alda.io/) music programming language. While sometimes in plain text people use `#` and `b` to notate sharps and flats, `fantazia` do not opt for this notation because `b` might be confused with the note name B.
+Pitch / interval objects contains a set of basic properties including step, accidental, tone and frequency, etc.
 
+In an `OPitch` object:
 
-Below are the most important properties an `OPitch` object has:
+* `step` is the diatonic step of the pitch object, an integer between 0 and 6, which stands for C, D, E, F, G, A and B, respectively.
+* `acci` is the accidental, represented as a number (in most cases integers) notating the chromatic tone change.
+* `tone` is the chromatic tone of a pitch in an octave. The size of an octave is mapped evenly to the [0, 12) range, with correspondence to the 12 semitones in an octave, where the C pitch is mapped to 0.
+* `freq` is the frequency value of the pitch relative to C pitch (not the frequency in hertz). The C pitch has frequency 1.
 
-* `step`: an integer between `0` and `6`
-* `acci`: an arbitrary real number representing alteration from the base chromatic tone defined by `step` in semitones, which is `(0, 2, 4, 5, 7, 9, 11)` respectively for `step` value `0` to `6`. Typically integers, or, in the microtonal case, fractions
-* `tone`: sum of base chromatic tone and accidental value, which refers to the tonal distance of this `OPitch` object from the C pitch in semitones. The identity holds that `p.tone == (0, 2, 4, 5, 7, 9, 11)[p.step] + p.acci` (or, equivalently)
+In a `Pitch` object:
 
-
-<!-- The `OPitch` object has another property called `tone`, which describes the pitch's chromatic position in an octave. The octave space from C to a higher C is mapped to [0, 12) range, and notes C, D, E, F, G, A, B without accidental have tone values of 0, 2, 4, 5, 7, 9, 11, respectively.
-
-The tone value is computed by summing the tone value of base note and the numeric representation of accidental. (i.e. `p.tone = (0, 2, 4, 5, 7, 9, 11)[p.deg] + p.acci`)
-
-```python
-# ... following previous examples
-print(p1.tone, p2.tone, p3.tone)
-# Output: 0 9 10
-```
-
-> Note that for consistency reasons the tone value might sometimes exceed the [0, 12) range. For example, B sharp has tone value 12 while C flat has tone value -1. However it can be ascertained that in `OPitch`, [enharmonics](#enharmonics) (i.e. notes representing the same pitch but spelled differently) have the same tone value modulus by 12.
-
-`OPitch` objects can also be created by specifying a degree and tone value, or just a tone value. When using just a tone value, accidental will be chosen automatically according to an accidental preference rule.
-
-```python
-import fantazia as fz
-
-p6 = fz.OPitch.fromDegAndTone("E", 3) # E flat
-p7 = fz.fromDeg(6) # F sharp
-
-print(p6, p7) # Output: E- F+
-```
-
-> The accidental preference rule is a more complicated topic and will not be described in details here. It can be set by the `acciPref` argument in `fz.fromDeg` and have some possible values listed in `fz.AcciPrefs.XXX`. -->
-
-
-#### `Pitch`: Specific Pitch Type
-
-Similar to `OPitch` objects, you can also use a string notation to create a `Pitch` object by calling the `Pitch()` constructor, or its abbreviation `P()`.
-
-The string notation of a `Pitch` object is a valid `OPitch` string notation followed by an underscore and an octave value, such as `C_0`, `E-_2`, `F+_-1`. When the octave is omitted it is defaulted to 0.
-
-Unlike the convention of MIDI, `fantazia` refers to the octave of middle C as octave 0 instead of octave 4.
-
-```py
-import fantazia as fz
-
-print(fz.P("C_0"), fz.P("E-_2"), fz.P("F+_-1"), fz.P("A"))
-# C_0 E-_2 F+_1 A_0
-```
-
-The most important properties of a `Pitch` object are:
-
-* `opitch`, which refers to the general pitch this pitch belongs to without specific octave
-* `o`: the nominal octave of the pitch
-* `step`: the octave-sensitive step value. Equals to `p.opitch.step + 7 * p.o`
-* `acci`: the accidental of the pitch, which is the same as `p.opitch.acci`
-* `tone`: octave-sensitive tone value. Equals to `p.opitch.tone + 12 * p.o`
+* The property `opitch` gives the general pitch of this pitch object without octave specification.
+* `o` is the octave the pitch object is located in. The middle octave (of the middle C pitch) is octave 0. (This is different from the convention of MIDI, where middle octave is mostly referred to as octave 4)
+* The `step` property is added by number of octaves times 7 compared to `OPitch`.
+* `acci` is the same as `OPitch`
+* The `tone` property is added by number of octaves times 12 compared to `OPitch`.
+* `freq` is the frequency value relative to middle C. Octaves are multiplied as powers of two compared to `OPitch` objects.
 
 
 ### Pitch / Interval Arithmetics
 
-
-#### Addition
-
-Adding two pitches / intervals `p1`, `p2` results in a third pitch / interval `p3` defined by the following conditions:
-
-* In the `OPitch` case:
-  * `(p1.step + p2.step) % 7 == p3.step`
-  * `p1.tone + p2.tone - (p1.step + p2.step) // 7 * 12 == p3.tone`
-  
-* In the `Pitch` case:
-  * `p1.step + p2.step == p3.step`
-  * `p1.tone + p2.tone == p3.tone`
-
-It can be argued that the pitch `p3` exists and is unique. Addition of pitches / intervals can be comprehended as stacking two intervals together or transposing a pitch by an interval. For `OPitch`, the result is taken modulus into the range of an octave, while the result of `Pitch` is octave-sensitive.
-
 ```py
 import fantazia as fz
 
-print(fz.oP("E") + fz.oP("E-"))  # G
-print(fz.oP("E") + fz.oP("E"))  # G+
-print(fz.oP("E-") + fz.oP("E-"))  # G-
+# general pitch
+print(
+    fz.oP("E") + fz.oP("E-"),  # addition (transposing a pitch up by an interval)
+    fz.oP("A") - fz.oP("D+"),  # subtraction (transposing down by an interval)
+    fz.oP("E") * 2,            # multiplication by integer
+    3 * fz.oP("G"),            # (order does not matter)
+    -fz.oP("E"),               # negation (interval inversion)
+    -fz.oP("F+"),
+)
+# all results will be rounded into an octave
+# Output: G E- G+ A A- G-
 
-print(fz.oP("F+") + fz.oP("A-"))  # D
-print(fz.P("F+_0") + fz.P("A-_0"))  # D_1
+# specific pitch
+print(
+    fz.P("E") + fz.P("E-"),    # addition
+    fz.P("A") - fz.P("D+"),    # subtraction
+    fz.P("E") * 2,             # multiplication by integer
+    3 * fz.P("G"),
+    -fz.P("E"),                # negation
+    -fz.P("F+"),
+)
+# result is octave sensitive
+# octave differences are kept
+# Output: G_0 G-_0 G+_0 A_1 A-_-1 G-_-1
 ```
 
-#### Negation and Subtraction
+In `fantazia`, arithmetics between pitch objects can be done easily by operators. The most commonly used arithmetic operations include addition, negation, subtraction and multiplication by integer.
 
-#### Multiplication by Integer
-
-#### Group Theory Explanation
-
-Pitches / intervals exhibit [**Abelian group**](https://en.wikipedia.org/wiki/Abelian_group) properties. Below is an explanation on `OPitch` objects. For `Pitch` objects you need to take octave into consideration, but the rudiments are the same.
-
-* two `OPitch` objects are equal *if and only if* they have the same `deg` and `acci` value, or, equivalently, the same `deg` and `tone` value.
-
-* In the set of all possible `OPitch` objects, the **operation "add"** can be defined such that `p1 + p2` results in a new `OPitch` object `p3`, where `p3.deg == (p1.deg + p2.deg) % 7` and `p3.tone % 12 == (p1.tone + p2.tone) % 12`. Such a `p3` exists and is unique for any `p1` and `p2`. The "add" operation is commutative.
-
-* The C pitch / perfect unison interval is the **identity element**, whose `deg` and `tone` value both equals to `0`. Adding any pitch by C result in the same return as itself, and C is the only element satisfying this property.
-
-* When regarding `OPitch` objects as an interval, the inversion of an interval is the **negation** of the original object, because an interval and its negation sums up to perfect octave, which, in `OPitch` will be taken modulus to perfect unison.
+* Addition / subtraction moves a pitch up / down by an interval.
+* Negation gives the inversion of an interval.
+* Multiplication stacks an interval multiple times.
+* In `OPitch`, the result is always taken modulus into an octave, while in `Pitch`, octave changes will be reflected in the results.
 
 
-### Enharmonics
+## Xenharmonic Support
 
-**Enharmonics** refer to pitches with different musical notation but share the same tone value, for example, C sharp and D flat.
+While the main package of `fantazia` uses pitch notations based on the 12 tone equal temperament system, alternative tuning methods are also supported through the `fantazia.xen` subpackage. Currently available tuning methods include all equal temperaments and just intonation. Support for notating pitches with radical frequencies is being considered.
 
-In `fantazia` you can judge whether two `OPitch` objects are enharmonic by using `p1.isEnharmonic(p2)`. This is equivalent to `(p1.tone - p2.tone) % 12 == 0`.
+Details for alternative tunings are explained in the documentations (although currently none up till now).
 
-```python
-import fantazia as fz
+```py
+from fantazia.xen import edo53, ji
 
-p1 = fz.OPitch("F+")
-p2 = fz.OPitch("G-")
-p3 = fz.OPitch("B+")
-p4 = fz.OPitch("C")
+# equal temperaments other than 12-edo
+# follows the chain-of-fifth notation rule
+p1 = edo53.oP("C+")
+print(
+    edo53.edo,        # number of equal divisions of an octave
+    edo53.sharpness,  # number of edo steps a sharp sign raises
+    edo53.diatonic,   # edo steps that the diatonic steps are mapped to
+)
+# Output: 53 5 [ 0  9 18 22 31 40 49]
 
-print(*(p.tone for p in (p1, p2, p3, p4)))
-print(p1.isEnharmonic(p2), p3.isEnharmonic(p4))
+print(
+    p1, p1.step, p1.acci,
+    p1.tone,  # `tone` is measured by edo steps here
+    p1.pos,   # relative position of the pitch in an octave
+              # where an octave is mapped evenly to [0, 1)
+    p1.freq,
+)
+# Output: C+@edo53 0 1 5 5/53 1.067576625048014
 
-# Output:
-# 6 6 12 0
-# True True
+# just intonation, where frequencies are rational numbers
+# follows the FJS (functional just system) notation rule
+p2 = ji.oP("E(5)")
+print(
+    p2, p2.step, p2.acci, p2.pos,
+    p2.freq,  # frequency represented in exact form as a rational number
+)
+# Output: E(5)@ji3 2 0 0.32192809488736235 5/4
 ```
-
-For octave specific `Pitch` objects, `p1.isEnharmonic(p2)` is equivalent to `p1.tone == p2.tone`. The same note in different octaves are not considered enharmonics.
-
-```python
-import fantazia as fz
-
-p1 = fz.Pitch("C_0")
-p2 = fz.Pitch("B+_-1")
-p3 = fz.Pitch("B+_0")
-
-print(p1.isEnharmonic(p2), p1.isEnharmonic(p3))
-# Output: True False
-```
-
-#### Group Theory Explanation
-
-Enharmonic is an **equivalence relation** (i.e. it is reflexive, symmetric and transitive). All notes that are enharmonic of C, like C itself, B sharp, D double-flat, etc., forms a **subgroup** of the pitch Abelian group: since they all have tone value 0 (or 12), they add up to have tone value still 0 (or 12). The negation of these pitches are also enharmonic of C. By taking the **quotient group** of the pitch group over this subgroup, the result is **isomorphic** to &#x2124;<sub>12</sub> = &#x2124;/12&#x2124; (or, if taking microtones into consideration, &#x211d;/12&#x2124;).
