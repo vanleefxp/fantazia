@@ -8,7 +8,7 @@ from abc import ABCMeta, abstractmethod
 from bisect import bisect_left, bisect_right
 from collections.abc import Callable, Iterable, Iterator, Sequence, Set
 from functools import lru_cache
-from numbers import Integral, Real
+from numbers import Integral, Real, Rational
 from typing import Self, overload, Any, Literal
 from fractions import Fraction as Q
 import math
@@ -23,6 +23,7 @@ if t.TYPE_CHECKING:  # pragma: no cover
     import music21 as m21  # pragma: no cover
 
 from .utils.cls import (
+    NewHelperMixin,
     cachedClassProp,
     cachedGetter,
     lazyIsInstance,
@@ -40,7 +41,7 @@ from .utils.number import (
     qdiv,
 )
 from .utils.collection import updated, cycGet
-from ._math import AbelianElement
+from .math_ import AbelianElement, Monzo
 
 # TODO)) put utils in a separate library
 
@@ -741,25 +742,6 @@ class _DegMapPitchesView(Sequence["OPitch"], Set["OPitch"]):
         return np.array([self._getItem(k) for k in key], dtype=object)
 
 
-class NewHelperMixin(metaclass=ABCMeta):
-    @classmethod
-    @lru_cache
-    def _newHelper(cls, *args, **kwargs) -> Self:
-        """
-        `_newHelper` is the cached version of `_newImpl`
-        """
-        return cls._newImpl(*args, **kwargs)
-
-    @classmethod
-    @abstractmethod
-    def _newImpl(cls, *args, **kwargs) -> Self:
-        """
-        The fundamental method of creating a new instance of the current class, which all
-        other constructors of this class depends on.
-        """
-        raise NotImplementedError
-
-
 class PitchNotationBase[
     OPType: "OPitchNotation"[PType],
     PType: "PitchNotation"[OPType],
@@ -1021,11 +1003,17 @@ class EDOPitchBase[OPType: "OEDOPitch", PType: "EDOPitch"](
 
     @property
     def pos(self) -> Real:
-        return resolveInt(Q(self.tone, self.edo))
+        tone = self.tone
+        if isinstance(tone, Rational):
+            return Q(self.tone, self.edo)
+        return self.tone / self.edo
 
     @property
     def freq(self) -> Real:
-        return 2**self.pos
+        pos = self.pos
+        if isinstance(pos, Rational):
+            return Monzo._newHelper(pyr.pmap({2: pos}))
+        return 2**pos
 
     def isEnharmonic(self, other: Any) -> bool:
         if not isinstance(other, self.__class__):

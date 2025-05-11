@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from abc import ABCMeta
-from typing import overload, Callable, Any, Never
+from abc import ABCMeta, abstractmethod
+from typing import Self, overload, Callable, Any, Never
 import typing as t
 import sys
 from functools import partial
 from threading import RLock
 from weakref import WeakSet
+from functools import lru_cache
 
 __all__ = [
     "cachedProp",
@@ -358,3 +359,23 @@ def noInstance[T](cls: type[T]) -> type[T]:
 
     cls.__new__ = __new__
     return cls
+
+
+class NewHelperMixin(metaclass=ABCMeta):
+    @classmethod
+    @lru_cache
+    def _newHelper(cls, *args, **kwargs) -> Self:
+        """
+        The cached version of `_newImpl`
+        """
+        return cls._newImpl(*args, **kwargs)
+
+    @classmethod
+    @abstractmethod
+    def _newImpl(cls, *args, **kwargs) -> Self:
+        """
+        The fundamental method of creating a new instance of the current class, which all
+        other constructors of this class depends on. Here all the arguments should already be
+        regularized and no more conversion is needed.
+        """
+        raise NotImplementedError

@@ -29,6 +29,9 @@ Issues = "https://github.com/vanleefxp/fantazia/issues"
 
 [project.optional-dependencies]
 m21 = ["music21>=9.3.0"]
+sp = [
+    "sympy>=1.14.0",
+]
 
 [build-system]
 requires = ["setuptools >= 77.0.3"]

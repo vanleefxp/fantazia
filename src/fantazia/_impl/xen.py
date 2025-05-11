@@ -27,6 +27,7 @@ from . import (
     _resolveStep,
     _resolveAcci,
 )
+from .math_ import Monzo
 from .utils.cls import cachedProp, cachedGetter, classProp, singleton
 from .utils.number import alternateSignInts, primeFactors, pf2Rational
 
@@ -297,18 +298,24 @@ def _commaPf(adjust: Q, target: Counter[int] = None) -> Counter[int]:
     return target
 
 
-def _resolveFreq(freq: Real | str | PitchNotationBase, limit=_MISSING) -> Q:
+def _resolveFreq(freq: Real | str | PitchNotationBase, limit=_MISSING) -> Monzo:
     if isinstance(freq, PitchNotationBase):
         freq = freq.freq
-    freq = Q(freq)
-    if freq < 0:
-        raise ValueError("Frequency should not be zero.")
-    elif freq < 0:
-        freq = -freq
-        warnings.warn("Frequency should be positive. Here the absolute value is taken.")
-    if limit is not _MISSING:
-        freq = freq.limit_denominator(limit)
-    return freq
+    if isinstance(freq, Monzo):
+        return freq
+    if not isinstance(freq, (str, Mapping, Rational)):
+        # freq: float
+        freq = Q(freq)
+        if freq == 0:
+            raise ValueError("Frequency should not be zero.")
+        elif freq < 0:
+            freq = -freq
+            warnings.warn(
+                "Frequency should be positive. Here the absolute value is taken."
+            )
+        if limit is not _MISSING:
+            freq = freq.limit_denominator(limit)
+    return Monzo(freq)
 
 
 def _resolveAdjust(adjust: Rational | str | Mapping[int, int] = 1) -> Q:
@@ -339,11 +346,11 @@ class JIPitchBase(PitchWrapperBase["OJIPitch", "JIPitch"]):
 
     @classmethod
     @lru_cache
-    def _fromFreq(cls, freq: Q) -> Self:
-        pf = primeFactors(freq)
+    def _fromFreq(cls, freq: Monzo) -> Self:
+        pf = Counter(freq.pf)
         p2 = pf.pop(2, 0)
         p3 = pf.pop(3, 0)
-        adjust = pf2Rational(pf)
+        adjust = Monzo._fromMapping(pf)
         for prime, power in pf.copy().items():
             p2_fjs, p3_fjs = fjsMaster(prime)
             dp2, dp3 = p2_fjs * power, p3_fjs * power
@@ -352,12 +359,12 @@ class JIPitchBase(PitchWrapperBase["OJIPitch", "JIPitch"]):
             p2 -= dp2
             p3 -= dp3
         res = cls.opitchType._newHelper(OPitch.co5(p3), adjust)
-        res._comma = pf2Rational(pf)  # cache
+        res._comma = Monzo._fromMapping(pf)
         q, r = divmod(p3, 7)
         neg_p2_expected = (r * 3 // 2) + q * 11
         pf[3] += p3
         pf[2] -= neg_p2_expected
-        res._freq = pf2Rational(pf)  # cache
+        res._freq = Monzo._fromMapping(pf)
         if issubclass(cls, PitchNotation):
             o = p2 + neg_p2_expected
             res = cls._newHelper(res, o)

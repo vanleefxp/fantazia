@@ -6,15 +6,15 @@ import typing as t
 from typing import overload, Literal, Self
 from enum import StrEnum
 from bisect import bisect_left
-from numbers import Number, Real, Rational
+from numbers import Number, Real, Rational, Integral
 from fractions import Fraction as Q
 from math import inf, nan
 from functools import reduce
 import operator as op
 import itertools as it
 import sys
-
 from .cls import singleton
+from .._snippet.sympy_primepi import primepi
 
 if t.TYPE_CHECKING:
     import numpy as np
@@ -76,6 +76,12 @@ if t.TYPE_CHECKING:
 
     @overload
     def minmax[T: SupportsRichComparison](items: Iterable[T]) -> tuple[T, T]: ...
+
+    @overload
+    def primes(stop: Integral) -> Iterator[int]: ...
+
+    @overload
+    def primes(start: Integral, stop: Integral) -> Iterator[int]: ...
 
 
 def nextPow2(
@@ -488,17 +494,40 @@ class _PrimeTable:
         return self._data[n]
 
 
-def primes(start: int = 2) -> Iterable[int]:
+def primes(a=None, b=None, /, *, start=None, stop=None, n=None) -> Iterable[int]:
     """A generator that yields prime numbers."""
     from gmpy2 import next_prime
 
-    n = start
-    while True:
-        yield n
-        n = int(next_prime(n))
+    if b is None:
+        if a is None:
+            if start is None:
+                start = 2
+        elif n is not None and start is None:
+            start = a
+        elif stop is None:
+            stop = a
+    else:
+        if start is None:
+            start = a
+        if stop is None:
+            stop = b
+
+    num = int(next_prime(start - 1))
+    if n is not None:
+        for _ in range(n):
+            yield num
+            num = int(next_prime(num))
+    elif stop is None:
+        while True:
+            yield num
+            num = int(next_prime(num))
+    else:
+        while num < stop:
+            yield num
+            num = int(next_prime(num))
 
 
-def nthPrime(n: int) -> int:
+def prime(n: int) -> int:
     """
     Returns the `n`-th prime number.
     """
@@ -556,15 +585,6 @@ def _primeFactors(num: Rational) -> Counter[int]:
     return pf
 
 
-if "sympy" in sys.modules:
-    # use `sympy`'s factorization function if available
-    _sympy_factorrat = sys.modules["sympy"].factorrat
-    _sympy_rational = sys.modules["sympy"].Rational
-
-    def _primeFactors(num: Rational) -> Counter[int]:
-        return Counter(_sympy_factorrat(_sympy_rational(num)))
-
-
 def _cleanZeroes(pf: Counter[int]) -> Counter[int]:
     """
     Remove all zero powers from the prime factorization.
@@ -575,25 +595,30 @@ def _cleanZeroes(pf: Counter[int]) -> Counter[int]:
     return pf
 
 
-def primeFactors(arg0, *args) -> Counter[int]:
+def primeFactors(*args) -> Counter[int]:
     """
-    Factorize a rational number into powers of prime.
+    Factorize a rational number or simple radical into powers of prime.
     """
-
-    if isinstance(arg0, Mapping):
-        pf = Counter()
-        for k, v in arg0.items():
-            pf_k = _primeFactors(k)
-            for k1, v1 in pf_k.items():
-                pf[k1] += v * v1
-    elif isinstance(arg0, Iterable):
-        pf = Counter()
-        for num in arg0:
-            pf.update(_primeFactors(num))
+    if len(args) == 1 and isinstance(args[0], Real):
+        pf = _primeFactors(args[0])
+        return pf
     else:
-        pf = _primeFactors(arg0)
-        for num in args:
-            pf.update(_primeFactors(num))
+        pf = Counter()
+        for arg in args:
+            if isinstance(arg, Mapping):
+                for k, v in arg.items():
+                    if v != 0:
+                        pf_k = _primeFactors(k)
+                        for k1, v1 in pf_k.items():
+                            pf[k1] += v * v1
+            elif isinstance(arg, Iterable):
+                for num in arg:
+                    pf.update(_primeFactors(num))
+            else:
+                if pf is None:
+                    pf = _primeFactors(arg)
+                else:
+                    pf.update(_primeFactors(arg))
     return _cleanZeroes(pf)
 
 
@@ -634,3 +659,15 @@ def resolveNpType(num):
         return float(num)
     else:
         return num
+
+
+if "sympy" in sys.modules:
+    # use `sympy`'s factorization function if available
+    # sympy is already imported, so importing again will not cost much time
+    import sympy as sp
+    from sympy.ntheory.generate import prime, _primepi as primepi  # noqa: F401
+
+    primepi: Callable[[Integral], int]
+
+    def _primeFactors(num: Rational) -> Counter[int]:
+        return Counter(sp.factorrat(sp.Rational(num)))
