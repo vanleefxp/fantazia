@@ -9,8 +9,6 @@ from bisect import bisect_left
 from numbers import Number, Real, Rational, Integral
 from fractions import Fraction as Q
 from math import inf, nan
-from functools import reduce
-import operator as op
 import itertools as it
 import sys
 from .cls import singleton
@@ -18,7 +16,7 @@ from .._snippet.sympy_primepi import primepi
 
 if t.TYPE_CHECKING:
     import numpy as np
-    from _typeshed import SupportsRichComparison, SupportsMul
+    from _typeshed import SupportsRichComparison
 
 __all__ = [
     "nextPow2",
@@ -534,10 +532,6 @@ def prime(n: int) -> int:
     if n < 0:
         raise ValueError("n must be non-negative")
     return _PrimeTable()[n]
-
-
-def prod[T: SupportsMul](seq: Iterable[T], *, start: T = 1) -> T:
-    return reduce(op.mul, seq, start)
 
 
 def alternateSignInts() -> Iterator[int]:

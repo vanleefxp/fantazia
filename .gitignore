@@ -2,3 +2,4 @@
 **/*.egg-info/
 _test.py
 **/.coverage
+result.json

@@ -1,16 +1,19 @@
 from __future__ import annotations
 
 from typing import Any, Self
+from types import MappingProxyType as mappingproxy
 import typing as t
-from abc import abstractmethod
-from numbers import Integral, Rational, Real
-from collections.abc import Mapping, MutableMapping, Iterator, Callable
+from abc import abstractmethod, ABCMeta
+from numbers import Integral, Rational, Real, Complex
+from collections.abc import Mapping, MutableMapping, Iterable, Iterator, Callable
 from collections import Counter
 from functools import lru_cache
 from fractions import _hash_algorithm, Fraction as Q
 import math
 import ast
 import operator as op
+import warnings
+import itertools as it
 
 import pyrsistent as pyr
 
@@ -22,7 +25,7 @@ from .utils.cls import (
     cachedGetter,
     cachedClassProp,
 )
-from .utils.number import primeFactors, primepi, primes, prod, resolveInt
+from .utils.number import primeFactors, primepi, primes, prime, resolveInt
 
 _hash_algorithm: Callable[[int, int], int]
 
@@ -35,10 +38,13 @@ __all__ = [
     "Monzo",
 ]
 
+_zero_registry = {}
+_one_registry = {}
+
 
 class AbelianElement(metaclass=ClassPropMeta):
     """
-    Represents an element of an **abelian group**, aka commutative group in terms of the "add"
+    Represents an element of an **abelian group**, aka. commutative group in terms of the "add"
     operator.
     """
 
@@ -49,6 +55,21 @@ class AbelianElement(metaclass=ClassPropMeta):
     def ZERO(cls) -> Self:
         """Identity element of the group."""
         raise NotImplementedError
+
+    @staticmethod
+    @lru_cache
+    def zero[T: "AbelianElement"](cls: T | type[T]) -> T:
+        """
+        Returns the zero / identity element of the addition abelian group. This works even
+        if `cls` is not an explicit subclass of `AbelianElement`.
+        """
+        if not isinstance(cls, type):
+            cls = cls.__class__
+        if cls in _zero_registry:
+            return _zero_registry[cls]
+        elif hasattr(cls, "ZERO"):
+            return cls.ZERO
+        return cls(0)
 
     @abstractmethod
     def __add__(self, other: Self) -> Self:
@@ -75,7 +96,7 @@ class AbelianElement(metaclass=ClassPropMeta):
 
     def __mul__(self, other: Any) -> Self:
         """
-        `self * other`, olny defined when `other` is an integer.
+        `self * other`, only defined when `other` is an integer.
 
         * If `other` is positive, the result equals to the sum of `other` `self`s
         * If `other` is zero, the result equals to the zero element of the group
@@ -104,6 +125,11 @@ class AbelianElement(metaclass=ClassPropMeta):
 
 
 class MulAbelianElement(metaclass=ClassPropMeta):
+    """
+    Represents an element of an **abelian group**, aka. commutative group in terms of the
+    "multiply" operator.
+    """
+
     __slots__ = ()
 
     @classProp
@@ -111,6 +137,20 @@ class MulAbelianElement(metaclass=ClassPropMeta):
     def ONE(cls) -> Self:
         """Identity element of the group."""
         raise NotImplementedError
+
+    @staticmethod
+    def one[T: "MulAbelianElement"](cls: T | type[T]) -> T:
+        """
+        Returns the identity element of a multiplication abelian group type. This works even
+        if `cls` is not an explicit subclass of `MulAbelianElement`.
+        """
+        if not isinstance(cls, type):
+            cls = cls.__class__
+        if cls in _one_registry:
+            return _one_registry[cls]
+        elif hasattr(cls, "ONE"):
+            return cls.ONE
+        return cls(1)
 
     def __pos__(self) -> Self:
         return self
@@ -153,6 +193,9 @@ class MulAbelianElement(metaclass=ClassPropMeta):
         return NotImplemented
 
 
+AbelianElement.register(Complex)
+MulAbelianElement.register(Complex)
+
 # class Q(Fraction, AbelianElement, MulAbelianElement, metaclass=ClassPropMeta):
 #     @cachedClassProp(key="_inf")
 #     def INF(cls) -> Self:
@@ -180,13 +223,344 @@ class MulAbelianElement(metaclass=ClassPropMeta):
 #         return self._from_coprime_ints(self.denominator, self.numerator)
 
 
-class Monzo(MulAbelianElement, Real, NewHelperMixin):
+class CounterBase[T, N: Real](Mapping[T, N], metaclass=ABCMeta):
+    """
+    Abstract base class for counter-like mappings. Provides an abstraction over the
+    `Counter` class from the `collections` module, which is a subclass of `dict`.
+    """
+
+    # code partly copied from `collections.Counter`
+
+    def total(self) -> N:
+        "Sum of the counts"
+        return sum(self.values())
+
+    def most_common(self, n: Integral | None = None):
+        """
+        List the n most common elements and their counts from the most
+        common to the least.  If n is None, then list all element counts.
+        """
+        # Emulate Bag.sortedByCount from Smalltalk
+        if n is None:
+            return sorted(self.items(), key=op.itemgetter(1), reverse=True)
+
+        # Lazy import to speedup Python startup time
+        import heapq
+
+        return heapq.nlargest(n, self.items(), key=op.itemgetter(1))
+
+    def elements(self) -> Iterator[T]:
+        """
+        Iterator over elements repeating each as many times as its count.
+
+        **Note**: This method only works when all counts are integers. If an element's count
+        has been set to zero or is a negative number, `elements()` will ignore it.
+        """
+        # Emulate Bag.do from Smalltalk and Multiset.begin from C++.
+        return it.chain.from_iterable(it.starmap(it.repeat, self.items()))
+
+    def __eq__(self, other: Any) -> bool:
+        "True if all counts agree. Missing counts are treated as zero."
+        if not isinstance(other, CounterBase):
+            return NotImplemented
+        return all(self[e] == other[e] for c in (self, other) for e in c)
+
+    def __ne__(self, other: Any) -> bool:
+        "True if any counts disagree. Missing counts are treated as zero."
+        if not isinstance(other, CounterBase):
+            return NotImplemented
+        return not self == other
+
+    def __le__(self, other: Any) -> bool:
+        "True if all counts in self are a subset of those in other."
+        if not isinstance(other, CounterBase):
+            return NotImplemented
+        return all(self[e] <= other[e] for c in (self, other) for e in c)
+
+    def __lt__(self, other: Any) -> bool:
+        "True if all counts in self are a proper subset of those in other."
+        if not isinstance(other, CounterBase):
+            return NotImplemented
+        return self <= other and self != other
+
+    def __ge__(self, other: Any) -> bool:
+        "True if all counts in self are a superset of those in other."
+        if not isinstance(other, CounterBase):
+            return NotImplemented
+        return all(self[e] >= other[e] for c in (self, other) for e in c)
+
+    def __gt__(self, other: Any) -> bool:
+        "True if all counts in self are a proper superset of those in other."
+        if not isinstance(other, CounterBase):
+            return NotImplemented
+        return self >= other and self != other
+
+
+class MutableCounterBase[T, N: Real](
+    CounterBase[T, N], MutableMapping[T, N], metaclass=ABCMeta
+):
+    def update(self, iterable: Mapping[T, N] | Iterable[T] | None = None, /, **kwds):
+        """Like dict.update() but add counts instead of replacing them.
+
+        Source can be an iterable, a dictionary, or another Counter instance.
+
+        >>> c = Counter('which')
+        >>> c.update('witch')           # add elements from another iterable
+        >>> d = Counter('watch')
+        >>> c.update(d)                 # add elements from another counter
+        >>> c['h']                      # four 'h' in which, witch, and watch
+        4
+
+        """
+        # The regular dict.update() operation makes no sense here because the
+        # replace behavior results in some of the original untouched counts
+        # being mixed-in with all of the other counts for a mismash that
+        # doesn't have a straight-forward interpretation in most counting
+        # contexts.  Instead, we implement straight-addition.  Both the inputs
+        # and outputs are allowed to contain zero and negative counts.
+
+        if iterable is not None:
+            if isinstance(iterable, Mapping):
+                if self:
+                    self_get = self.get
+                    for elem, count in iterable.items():
+                        self[elem] = count + self_get(elem, 0)
+                else:
+                    # fast path when counter is empty
+                    super().update(iterable)
+            else:
+                from collections import _count_elements
+
+                _count_elements(self, iterable)
+        if kwds:
+            self.update(kwds)
+
+    def subtract(self, iterable=None, /, **kwds):
+        """Like dict.update() but subtracts counts instead of replacing them.
+        Counts can be reduced below zero.  Both the inputs and outputs are
+        allowed to contain zero and negative counts.
+
+        Source can be an iterable, a dictionary, or another Counter instance.
+
+        >>> c = Counter('which')
+        >>> c.subtract('witch')             # subtract elements from another iterable
+        >>> c.subtract(Counter('watch'))    # subtract elements from another counter
+        >>> c['h']                          # 2 in which, minus 1 in witch, minus 1 in watch
+        0
+        >>> c['w']                          # 1 in which, minus 1 in witch, minus 1 in watch
+        -1
+
+        """
+        if iterable is not None:
+            self_get = self.get
+            if isinstance(iterable, Mapping):
+                for elem, count in iterable.items():
+                    self[elem] = self_get(elem, 0) - count
+            else:
+                for elem in iterable:
+                    self[elem] = self_get(elem, 0) - 1
+        if kwds:
+            self.subtract(kwds)
+
+    def clean_zeroes(self):
+        for k in frozenset(k for k, v in self.items() if v == 0):
+            del self[k]
+
+    def keep_positive(self):
+        """Internal method to strip elements with a negative or zero count"""
+        nonpositive = [elem for elem, count in self.items() if not count > 0]
+        for elem in nonpositive:
+            del self[elem]
+        return self
+
+    def __iadd__(self, other):
+        """Inplace add from another counter, keeping only positive counts.
+
+        >>> c = Counter('abbb')
+        >>> c += Counter('bcc')
+        >>> c
+        Counter({'b': 4, 'c': 2, 'a': 1})
+
+        """
+        for elem, count in other.items():
+            self[elem] += count
+        return self.keep_positive()
+
+    def __isub__(self, other):
+        """Inplace subtract counter, but keep only results with positive counts.
+
+        >>> c = Counter('abbbc')
+        >>> c -= Counter('bccd')
+        >>> c
+        Counter({'b': 2, 'a': 1})
+
+        """
+        for elem, count in other.items():
+            self[elem] -= count
+        return self.keep_positive()
+
+    def __ior__(self, other):
+        """Inplace union is the maximum of value from either counter.
+
+        >>> c = Counter('abbb')
+        >>> c |= Counter('bcc')
+        >>> c
+        Counter({'b': 3, 'c': 2, 'a': 1})
+
+        """
+        for elem, other_count in other.items():
+            count = self[elem]
+            if other_count > count:
+                self[elem] = other_count
+        return self.keep_positive()
+
+    def __iand__(self, other):
+        """Inplace intersection is the minimum of corresponding counts.
+
+        >>> c = Counter('abbb')
+        >>> c &= Counter('bcc')
+        >>> c
+        Counter({'b': 1})
+
+        """
+        for elem, count in self.items():
+            other_count = other[elem]
+            if other_count < count:
+                self[elem] = other_count
+        return self.keep_positive()
+
+
+MutableCounterBase.register(Counter)
+
+
+class CounterView[T, N: Real](CounterBase[T, N]):
+    def __init__(self, data: Mapping[T, N]):
+        super().__init__()
+        self._data = data
+
+    def __len__(self) -> int:
+        return len(self._data)
+
+    def __getitem__(self, key) -> N:
+        return super().get(key, 0)
+
+    def __iter__(self) -> Iterator[T]:
+        return iter(self._data)
+
+
+class MutableCounterView[T, N: AbelianElement](
+    CounterView[T, N], MutableCounterBase[T, N]
+): ...
+
+
+class MonzoBase(metaclass=ABCMeta):
+    __slots__ = ()
+
+    @property
+    @abstractmethod
+    def pf(self) -> Mapping[int, Rational]:
+        raise NotImplementedError
+
+    def __len__(self) -> int:
+        return primepi(max(self.pf.keys()))
+
+    def __getitem__(self, key: int) -> Rational:
+        return self.pf[prime(key)]
+
+    def __repr__(self) -> str:
+        return f"{self.__class__.__name__}({self!s})"
+
+    def __str__(self) -> str:
+        return " * ".join(
+            str(k) if v == 1 else f"{k}**{v}" if v.is_integer() else f"{k}**({v})"
+            for k, v in sorted(self.pf.items())
+        )
+
+    def is_rational(self) -> bool:
+        return all(v.is_integer() for v in self.pf.values())
+
+    def is_integer(self) -> bool:
+        return all(v >= 0 and v.is_integer() for v in self.pf.values())
+
+    def __iter__(self) -> Iterator[int]:
+        for p in primes(len(self)):
+            yield self.pf[p]
+
+    def _value(self) -> int | float:
+        return math.prod(k**v for k, v in self._pf.items())
+
+    def __int__(self) -> int:
+        return int(self._value())
+
+    def __float__(self) -> float:
+        return float(self._value())
+
+
+def _counter_cleanZeroes[T, N: Real](m: MutableMapping[T, N]) -> MutableMapping[T, N]:
+    for k in frozenset(k for k, v in m.items() if v == 0):
+        del m[k]
+    return m
+
+
+def _counter_update[T, N: Real](
+    m: MutableMapping[T, N], other: Mapping[T, N] | Iterable[T]
+) -> MutableMapping[T, N]:
+    Counter.update(m, other)
+    _counter_cleanZeroes(m)
+    return m
+
+
+def _counter_subtract[T, N: Real](
+    m: MutableMapping[T, N], other: Mapping[T, N] | Iterable[T]
+) -> MutableMapping[T, N]:
+    Counter.subtract(m, other)
+    _counter_cleanZeroes(m)
+    return m
+
+
+class MutableMonzo(MonzoBase):
+    __slots__ = ("_pf", "_pf_proxy")
+
+    def __init__(self):
+        super().__init__()
+        self._pf = dict()
+
+    @cachedProp(key="_pf_proxy")
+    def pf(self) -> Mapping[int, Rational]:
+        return mappingproxy(self._pf)
+
+    def __imul__(
+        self, other: Mapping[Integral, Rational] | MonzoBase | Rational
+    ) -> Self:
+        if isinstance(other, MonzoBase):
+            _counter_update(self._pf, other.pf)
+            return self
+        if isinstance(other, Rational):
+            if other <= 0:
+                raise ValueError("Negative value not allowed.")
+            p, q = other.as_integer_ratio()
+
+            from primefac import primefac
+
+            Counter.update(self._pf, primefac(p))
+            Counter.subtract(self._pf, primefac(q))
+            _counter_cleanZeroes(self._pf)
+
+            return self
+
+        return NotImplemented
+
+
+# TODO)) implement a mutable monzo type to speed up monzo creation
+
+
+class Monzo(MonzoBase, MulAbelianElement, Real, NewHelperMixin):
     """
     Represents the factorization of a positive simple radical value, in the form of
     $\\prod_{p_i \\text{prime}} p_i^{\\alpha_i}$, where $\\alpha_i$ are rational numbers.
     """
 
-    __slots__ = ("_pf", "_sgn", "_len", "_numerator", "_denominator", "_inv")
+    __slots__ = ("_pf", "_sgn", "_len", "_numerator", "_denominator", "_inv", "_hash")
     _pf: Mapping[int, Rational]
 
     @cachedClassProp(key="_one")
@@ -244,6 +618,13 @@ class Monzo(MulAbelianElement, Real, NewHelperMixin):
                 if not isinstance(num, Integral) or num <= 0:
                     raise ValueError(f"Invalid number: {num}.")
                 return cls._fromRational(num)
+            case ast.UnaryOp(op=ast.USub(), operand=ast.Constant(value=num)):
+                if not isinstance(num, Integral):
+                    raise ValueError(f"Invalid number: {num}.")
+                warnings.warn(
+                    "Monzo represents positive values only. Here the absolute value is taken."
+                )
+                return cls._fromRational(num)
             case ast.BinOp(left=left, op=ast.Pow(), right=right):
                 base = cls._parseAst(left)
                 neg = False
@@ -292,6 +673,10 @@ class Monzo(MulAbelianElement, Real, NewHelperMixin):
             case _:
                 raise ValueError(f"Invalid expression: {ast.unparse(src)}.")
 
+    @cachedGetter
+    def __len__(self) -> int:
+        return super().__len__()
+
     @property
     def pf(self) -> Mapping[int, Rational]:
         return self._pf
@@ -325,25 +710,6 @@ class Monzo(MulAbelianElement, Real, NewHelperMixin):
             return resolveInt(self.rational)
         else:
             return self._value()
-
-    @cachedGetter
-    def __len__(self) -> int:
-        return primepi(max(self._pf.keys()))
-
-    def __repr__(self) -> str:
-        return f"{self.__class__.__name__}({self!s})"
-
-    def __str__(self) -> str:
-        return " * ".join(
-            str(k) if v == 1 else f"{k}**{v}" if v.is_integer() else f"{k}**({v})"
-            for k, v in sorted(self._pf.items())
-        )
-
-    def is_rational(self) -> bool:
-        return all(v.is_integer() for v in self._pf.values())
-
-    def is_integer(self) -> bool:
-        return all(v >= 0 and v.is_integer() for v in self._pf.values())
 
     def __abs__(self) -> Self:
         return self
@@ -403,19 +769,6 @@ class Monzo(MulAbelianElement, Real, NewHelperMixin):
         pf = pyr.pmap({k: v * other for k, v in self._pf.items()})
         return self._newHelper(pf)
 
-    def __iter__(self) -> Iterator[int]:
-        for p in primes(len(self)):
-            return self._pf[p]
-
-    def _value(self) -> int | float:
-        return prod(k**v for k, v in self._pf.items())
-
-    def __int__(self) -> int:
-        return int(self._value())
-
-    def __float__(self) -> float:
-        return float(self._value())
-
     def __eq__(self, other: Any) -> bool:
         if isinstance(other, self.__class__):
             return self._pf == other._pf
@@ -428,6 +781,7 @@ class Monzo(MulAbelianElement, Real, NewHelperMixin):
             return float(self) == float(other)
         return False
 
+    @cachedGetter
     def __hash__(self) -> int:
         # hash must be consistent with builtin number types
         if self.is_integer():
@@ -556,7 +910,7 @@ class Monzo(MulAbelianElement, Real, NewHelperMixin):
                 "Conversion to `sympy` expression requires `sympy` to be installed."
             )
 
-        return prod(sp.Integer(k) ** v for k, v in self._pf.items())
+        return math.prod(sp.Integer(k) ** v for k, v in self._pf.items())
 
     # def _format_gen(
     #     self,

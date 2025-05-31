@@ -148,25 +148,6 @@ class classProp[T, P](property):
         super().__init__(fget, fset, fdel, doc)
 
     def __get__(self, instance: T | None, owner: type[T] = None) -> P:
-        # if owner is None:
-        #     owner = instance.__class__
-
-        # # The following line is crucial for the program to work.
-        # # If removed, `NotImplementedError` from abstract class properties will be triggered
-        # # unexpectedly.
-        # #
-        # # From current analysis, the problem is related to the `_abc__abc_init` function in
-        # # CPython's `_abc.c` module.
-        # #
-        # # Python version: 3.13.3
-        # getattr(owner, "__abstractmethods__")
-
-        # return self.fget(owner)
-
-        # initialization is not completed yet
-        # accessing might trigger `NotImplementedError` for abstract methods
-        # or `NameError` if the class property refers to a variable defined later on
-        # so just return the original function
         if owner not in _initCompleted:
             return self.fget
         return self.fget(owner)
@@ -362,6 +343,8 @@ def noInstance[T](cls: type[T]) -> type[T]:
 
 
 class NewHelperMixin(metaclass=ABCMeta):
+    __slots__ = ()
+
     @classmethod
     @lru_cache
     def _newHelper(cls, *args, **kwargs) -> Self:

@@ -1,216 +1,30 @@
-from abc import ABCMeta
 import typing as t
 from typing import Self, Any, overload
-from collections.abc import Sequence, Mapping
+from collections.abc import Mapping
 from collections import Counter
-from functools import cache, lru_cache
+from functools import lru_cache
 from numbers import Rational, Real, Integral
 from fractions import Fraction as Q
 import math
 import warnings
 
-from . import (
-    DiatonicPitchBase,
-    PitchWrapperBase,
-    OPitchWrapper,
-    PitchWrapper,
-    EDOPitchBase,
-    OEDOPitch,
-    EDOPitch,
-    PitchBase,
-    OPitch,
-    Pitch,
-    PitchNotationBase,
-    OPitchNotation,
-    PitchNotation,
-    _MISSING,
-    _resolveStep,
-    _resolveAcci,
-)
-from .math_ import Monzo
-from .utils.cls import cachedProp, cachedGetter, classProp, singleton
-from .utils.number import alternateSignInts, primeFactors, pf2Rational
+from .abc.base import PitchNotationBase, PitchNotation
+from .abc.diatonic import DiatonicPitchBase
+from .abc.wrapper import PitchWrapperBase, OPitchWrapper, PitchWrapper
+from .edo12 import OPitch, _resolveStep, _resolveAcci
+
+from ..math_ import Monzo
+from ..utils.cls import cachedProp, cachedGetter, classProp
+from ..utils.number import alternateSignInts, primeFactors, pf2Rational
 
 if t.TYPE_CHECKING:
     import music21 as m21
 
-__all__ = [
-    "edo",
-    "edo12",
-    "edo17",
-    "edo19",
-    "edo22",
-    "edo31",
-    "edo41",
-    "edo53",
-    "JustIntonation",
-    "ji",
-]
+__all__ = ["JIPitch", "OJIPitch", "JustIntonation", "ji"]
 
-LOG_2_3 = math.log2(3)
-LOG_2_3_M1 = math.log2(1.5)
-
-
-@lru_cache
-def co5Order(step: int, acci: int) -> int:
-    r = step * 2 % 7
-    if r == 6:
-        r = -1
-    return acci * 7 + r
-
-
-class Temperament[
-    PBType: PitchNotationBase[OPType, PType],
-    OPType: OPitchNotation[PType],
-    PType: PitchNotation[OPType],
-](metaclass=ABCMeta):
-    __slots__ = ("_pitchBaseType",)
-
-    def __new__(cls, pitchBaseType: type[PBType]):
-        self = super().__new__(cls)
-        self._pitchBaseType = pitchBaseType
-        return self
-
-    @property
-    def PitchBase(self) -> type[PBType]:
-        return self._pitchBaseType
-
-    @property
-    def OPitch(self) -> type[OPType]:
-        return self.PitchBase.opitchType
-
-    @property
-    def Pitch(self) -> type[PType]:
-        return self.PitchBase.pitchType
-
-    @property
-    def oP(self) -> type[OPType]:
-        return self.OPitch
-
-    @property
-    def P(self) -> type[PType]:
-        return self.Pitch
-
-
-class edo[
-    PBType: EDOPitchBase[OPType, PType],
-    OPType: OEDOPitch[PType],
-    PType: EDOPitch[OPType],
-](Temperament[PBType, OPType, PType]):
-    __slots__ = (
-        "_edo",
-        "_fifthSize",
-        "_sharpness",
-        "_diatonic",
-        "_pitchBaseType",
-        "_oPitchType",
-        "_pitchType",
-    )
-
-    def __new__(cls, n: int = 12) -> Self:
-        return _getEDO(n)
-
-    @property
-    def edo(self) -> int:
-        """Number of equal divisions of the octave."""
-        return self.PitchBase.edo
-
-    @property
-    def fifthSize(self) -> int:
-        """The size of a fifth interval measured by edo steps."""
-        return self.PitchBase.fifthSize
-
-    @property
-    def sharpness(self) -> int:
-        return self.PitchBase.sharpness
-
-    @property
-    def diatonic(self) -> Sequence[int]:
-        return self.PitchBase.diatonic
-
-    @property
-    def PitchBase(self) -> type[PBType]:
-        """The type equivalent to `PitchBase` for the standard 12-EDO."""
-        return self._pitchBaseType
-
-    @property
-    def OPitch(self) -> type[OPType]:
-        return self._pitchBaseType.opitchType
-
-    @property
-    def Pitch(self) -> type[PType]:
-        return self._pitchBaseType.pitchType
-
-
-edo12 = Temperament.__new__(edo, PitchBase)
-"""
-**12 EDO**, or 12 tone equal temperament, which is the standard tuning system.
-
-`edo12.PitchBase`, `edo12.OPitch` and `edo12.Pitch` will be redirected to `PitchBase`, `OPitch`
-and `Pitch` in the root package of `fantazia` respectively.
-"""
-
-
-@lru_cache
-def _getEDO(n: Integral) -> edo:
-    n: int = int(n)
-    fifthSize = round(n * LOG_2_3_M1)
-    d = math.gcd(n, fifthSize)
-    n //= d
-    fifthSize //= d
-
-    if n == 12:
-        return edo12
-    tuning = _createEdo(n)
-    tuning.PitchBase._fifthSize = fifthSize
-    return tuning
-
-
-@cache
-def _createEdo(n: int) -> edo:
-    class _PitchBase(
-        PitchWrapperBase["_OPitch", "_Pitch"], EDOPitchBase["_OPitch", "_Pitch"]
-    ):
-        @classProp
-        def edo(cls) -> int:
-            return n
-
-        @classProp
-        def opitchType(self) -> type["_OPitch"]:
-            return _OPitch
-
-        @classProp
-        def pitchType(self) -> type["_Pitch"]:
-            return _Pitch
-
-        def __str__(self):
-            return f"{self._p!s}@edo{self.edo}"
-
-    class _OPitch(_PitchBase, OPitchWrapper["_Pitch"], OEDOPitch["_Pitch"]):
-        __slots__ = ("_p", "_hash")
-
-        def __new__(cls, *args, **kwargs):
-            return cls._newImpl(OPitch(*args, **kwargs))
-
-    class _Pitch(_PitchBase, PitchWrapper["_OPitch"], EDOPitch["_OPitch"]):
-        __slots__ = ("_p", "_hash", "_opitch")
-
-        def __new__(cls, *args, **kwargs):
-            return cls._newImpl(Pitch(*args, **kwargs))
-
-    _PitchBase.__name__ = f"Pitch{n}Base"
-    _OPitch.__name__ = f"OPitch{n}"
-    _Pitch.__name__ = f"Pitch{n}"
-
-    return Temperament.__new__(edo, _PitchBase)
-
-
-edo17 = _getEDO(17)
-edo19 = _getEDO(19)
-edo22 = _getEDO(22)
-edo31 = _getEDO(31)
-edo41 = _getEDO(41)
-edo53 = _getEDO(53)
+_FJS_TOL = Q(65, 63)
+_LOG_2_3 = math.log2(3)
+_MISSING = object()
 
 
 def co5_p2_p3(step: Integral, acci: Integral) -> tuple[int, int]:
@@ -231,12 +45,17 @@ def pythagoreanFreq(step: int, acci: int) -> Rational:
     return pf2Rational(p2, p3)
 
 
-def pythagoreanPos(step: int, acci: int) -> float:
-    p2, p3 = co5_p2_p3(step, acci)
-    return p2 + p3 * LOG_2_3
-
-
-_FJS_TOL = Q(65, 63)
+def _pf2Rational_2_3(p2: int, p3: int):
+    if p2 >= 0:
+        if p3 >= 0:
+            return Q((1 << p2) * 3**p3, 1)
+        else:
+            return Q((1 << p2), 3**-p3)
+    else:
+        if p3 >= 0:
+            return Q(3**p3, 1 << -p2)
+        else:
+            return Q(1, (1 << -p2) * 3**-p3)
 
 
 @lru_cache
@@ -252,8 +71,8 @@ def fjsMaster(n: Integral) -> tuple[int, int]:
 
     neg_p2_prime = math.floor(math.log2(n))
     for co5 in alternateSignInts():
-        neg_p2_co5 = math.floor(LOG_2_3 * co5)
-        f1, f2 = pf2Rational(-neg_p2_co5, co5), Q(n, 1 << neg_p2_prime)
+        neg_p2_co5 = math.floor(_LOG_2_3 * co5)
+        f1, f2 = _pf2Rational_2_3(-neg_p2_co5, co5), Q(n, 1 << neg_p2_prime)
         if (f1 / f2 if f1 > f2 else f2 / f1) < _FJS_TOL:
             p2 = -neg_p2_prime + neg_p2_co5
             p3 = -co5
@@ -335,13 +154,13 @@ def _resolveAdjust(adjust: Rational | str | Mapping[int, int] = 1) -> Q:
     return adjust
 
 
-class JIPitchBase(PitchWrapperBase["OJIPitch", "JIPitch"]):
+class JustIntonation(PitchWrapperBase["OJIPitch", "JIPitch"]):
     @classProp
-    def opitchType(self) -> type["OJIPitch"]:
+    def OPitch(self) -> type["OJIPitch"]:
         return OJIPitch
 
     @classProp
-    def pitchType(self) -> type["JIPitch"]:
+    def Pitch(self) -> type["JIPitch"]:
         return JIPitch
 
     @classmethod
@@ -350,6 +169,11 @@ class JIPitchBase(PitchWrapperBase["OJIPitch", "JIPitch"]):
         pf = Counter(freq.pf)
         p2 = pf.pop(2, 0)
         p3 = pf.pop(3, 0)
+        if not p2.is_integer() or not p3.is_integer():
+            raise ValueError(
+                "Unique note name not possible when exponent of 2 or 3 is not an integer."
+            )
+        p2, p3 = int(p2), int(p3)
         adjust = Monzo._fromMapping(pf)
         for prime, power in pf.copy().items():
             p2_fjs, p3_fjs = fjsMaster(prime)
@@ -358,7 +182,7 @@ class JIPitchBase(PitchWrapperBase["OJIPitch", "JIPitch"]):
             pf[3] += dp3
             p2 -= dp2
             p3 -= dp3
-        res = cls.opitchType._newHelper(OPitch.co5(p3), adjust)
+        res = cls.OPitch._newHelper(OPitch.co5(p3), adjust)
         res._comma = Monzo._fromMapping(pf)
         q, r = divmod(p3, 7)
         neg_p2_expected = (r * 3 // 2) + q * 11
@@ -400,7 +224,7 @@ class JIPitchBase(PitchWrapperBase["OJIPitch", "JIPitch"]):
         return self._p == other._p and self.adjust == other.adjust
 
 
-class OJIPitch(JIPitchBase, OPitchWrapper["JIPitch"]):
+class OJIPitch(JustIntonation, OPitchWrapper["JIPitch"]):
     __slots__ = ("_p", "_adjust", "_freq", "_comma", "_hash")
     _adjust: Q
     acci: int
@@ -543,7 +367,7 @@ class OJIPitch(JIPitchBase, OPitchWrapper["JIPitch"]):
         return hash((self.__class__, self._p, self._adjust))
 
 
-class JIPitch(JIPitchBase, PitchWrapper[OJIPitch]):
+class JIPitch(JustIntonation, PitchWrapper[OJIPitch]):
     __slots__ = ("_opitch", "_o", "_freq", "_hash")
 
     if t.TYPE_CHECKING:  # pragma: no cover
@@ -668,12 +492,4 @@ class JIPitch(JIPitchBase, PitchWrapper[OJIPitch]):
         return hash((self.__class__, self.opitch, self.o))
 
 
-@singleton
-class JustIntonation(Temperament[JIPitchBase, OJIPitch, JIPitch]):
-    __slots__ = ()
-
-    def __new__(cls) -> Self:
-        return super().__new__(cls, JIPitchBase)
-
-
-ji = JustIntonation()
+ji = JustIntonation
