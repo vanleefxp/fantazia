@@ -1,33 +1,20 @@
-from __future__ import annotations
-
 from abc import abstractmethod
+from typing import Self, Any
+from numbers import Real, Rational
 from fractions import Fraction as Q
 from collections.abc import Sequence
-from numbers import Real, Rational, Integral
-from typing import Self, Any
-import math
 
-import numpy as np
 import pyrsistent as pyr
 
-from . import diatonic as _abc_diatonic
-from ...utils.cls import classProp, cachedClassProp
+from . import quasiDiatonic as _abc_quasiDiatonic
+from ...utils.cls import classProp
 from ...utils.number import qdiv
 from ...math_.ntheory import Monzo
 
-_DIATONIC_REORDER = np.arange(1, 14, 2) % 7
-_DIATONIC_REORDER.flags.writeable = False
 
-__all__ = ["Notation", "OPitch", "Pitch"]
-
-
-class Notation[OPType: "OPitch", PType: "Pitch"](_abc_diatonic.Notation[OPType, PType]):
-    """
-    [**Chain-of-fifth notation**](https://en.xen.wiki/w/Chain-of-fifths_notation) for EDO
-    tuning systems. This tuning system choses the best EDO approximation of a perfect
-    fifth (P5) interval and generate diatonic pitches in chain-of-fifths order.
-    """
-
+class Notation[OPType: "OPitch", PType: "Pitch"](
+    _abc_quasiDiatonic.Notation[OPType, PType]
+):
     __slots__ = ()
 
     @classProp
@@ -38,31 +25,23 @@ class Notation[OPType: "OPitch", PType: "Pitch"](_abc_diatonic.Notation[OPType, 
         """
         raise NotImplementedError
 
-    @cachedClassProp
-    def fifthSize(cls) -> int:
-        """
-        Number of EDO steps corresponding to a perfect fifth (P5) interval.
-        """
-        return round(math.log2(1.5) * cls.edo)
-
-    @cachedClassProp
-    def sharpness(cls) -> int:
+    @classProp
+    @abstractmethod
+    def sharpness(self) -> Real:
         """
         Number of EDO steps a sharp sign raises.
 
         **See**: <https://en.xen.wiki/w/Sharpness>
         """
-        return cls.fifthSize * 7 - cls.edo * 4
+        raise NotImplementedError
 
-    @cachedClassProp
-    def diatonic(cls) -> Sequence[Integral]:
+    @classProp
+    @abstractmethod
+    def diatonic(cls) -> Sequence[int]:
         """
         A sequence denoting mapping from diatonic steps to EDO steps.
         """
-        res = np.arange(-1, 6) * cls.fifthSize - cls.edo * (np.arange(-1, 6) // 2)
-        res = res[_DIATONIC_REORDER]
-        res.flags.writeable = False
-        return res
+        raise NotImplementedError
 
     @property
     def tone(self) -> Real:
@@ -92,18 +71,17 @@ class Notation[OPType: "OPitch", PType: "Pitch"](_abc_diatonic.Notation[OPType, 
         return self.tone == other.tone
 
 
-class OPitch[PType: "Pitch"](_abc_diatonic.OPitch[PType], Notation[Self, PType]):
-    __match_args__ = ("step", "acci", "tone")
+class OPitch[PType: "Pitch"](_abc_quasiDiatonic.OPitch[PType], Notation[Self, PType]):
     __slots__ = ()
 
     @classmethod
     def _fromStepAndTone(cls, step: int, tone: Real) -> Self:
-        step, o = divmod(step, 7)
+        step, o = divmod(step, cls.n_steps)
         tone -= o * cls.edo
         acci = qdiv(tone - cls.diatonic[step], cls.sharpness)
         return cls._fromStepAndAcci(step, acci)
 
-    def isEnharmonic(self, other: Any):
+    def isEnharmonic(self, other: Any) -> bool:
         if not isinstance(other, self.__class__):
             return super().isEnharmonic(other)
         return self.tone % self.edo == other.tone % self.edo
@@ -113,13 +91,12 @@ class OPitch[PType: "Pitch"](_abc_diatonic.OPitch[PType], Notation[Self, PType])
         return self.diatonic[self.step] + self.acci * self.sharpness
 
 
-class Pitch[OPType: OPitch](_abc_diatonic.Pitch[OPType], Notation[OPType, Self]):
-    __match_args__ = ("opitch", "o", "step", "acci", "tone")
+class Pitch[OPType: "OPitch"](_abc_quasiDiatonic.Pitch[OPType], Notation[OPType, Self]):
     __slots__ = ()
 
     @classmethod
     def _fromStepAndTone(cls, step: int, tone: Real) -> Self:
-        ostep, o = divmod(step, 7)
+        ostep, o = divmod(step, cls.n_steps)
         tone -= o * cls.edo
         acci = qdiv(tone - cls.diatonic[ostep], cls.sharpness)
         return cls._fromOPitchAndO(cls.OPitch._fromStepAndAcci(ostep, acci), o)

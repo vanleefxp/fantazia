@@ -11,7 +11,7 @@ from fractions import Fraction as Q
 import re
 import warnings
 
-from .abc import base as _abc_base, edo as _abc_edo, diatonic as _abc_diatonic
+from .abc import base as _abc_base, diatonic as _abc_diatonic, edoCo5 as _abc_edo
 from .abc.diatonic import (
     MAJOR_SCALE_TONES,
     STEP_NAMES,
@@ -746,9 +746,9 @@ class OPitch(Notation, _abc_edo.OPitch["Pitch"]):
                 # another `PitchBase` object
                 return arg1.opitch
 
-            from .abc.wrapper import Notation  # avoid cyclic import
+            from .abc import wrapper as _abc_wrapper  # avoid cyclic import
 
-            if isinstance(arg1, Notation):
+            if isinstance(arg1, _abc_wrapper.Notation):
                 return arg1.opitch._p
             if isinstance(arg1, _abc_base.DiatonicPitchBase):
                 return cls._newHelper(arg1.opitch.step, arg1.acci)
@@ -1093,9 +1093,9 @@ class Pitch(Notation, _abc_edo.Pitch[OPitch]):
                 # `OPitch` object
                 return cls._newHelper(arg1.opitch, 0)
 
-            from .abc.wrapper import Notation  # avoid cyclic import
+            from .abc import wrapper as _abc_wrapper  # avoid cyclic import
 
-            if isinstance(arg1, Notation):
+            if isinstance(arg1, _abc_wrapper.Notation):
                 return cls._newHelper(arg1.opitch._p, 0)
             if isinstance(arg1, _abc_diatonic.Notation):
                 return cls._fromStepAndAcci(arg1.step, arg1.acci)

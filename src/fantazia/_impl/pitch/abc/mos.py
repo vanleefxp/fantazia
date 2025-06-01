@@ -3,11 +3,10 @@ from __future__ import annotations
 from abc import abstractmethod
 from typing import Self
 from collections.abc import Sequence
-from numbers import Real
 
 import numpy as np
 
-from . import base as _abc_base
+from . import edo as _abc_edo
 from ...utils.cls import classProp, cachedClassProp
 from ...math_.mos import IntMOSPattern
 
@@ -18,7 +17,7 @@ __all__ = [
 ]
 
 
-class Notation[OPType: "OPitch", PType: "Pitch"](_abc_base.Notation[OPType, PType]):
+class Notation[OPType: "OPitch", PType: "Pitch"](_abc_edo.Notation[OPType, PType]):
     @classProp
     @abstractmethod
     def pattern(cls) -> IntMOSPattern:
@@ -27,6 +26,10 @@ class Notation[OPType: "OPitch", PType: "Pitch"](_abc_base.Notation[OPType, PTyp
     @classProp
     def edo(cls) -> int:
         return cls.pattern.edo
+
+    @classProp
+    def sharpness(self) -> int:
+        return self.pattern.sharpness
 
     @cachedClassProp
     def diatonic(cls) -> Sequence[int]:
@@ -40,24 +43,8 @@ class Notation[OPType: "OPitch", PType: "Pitch"](_abc_base.Notation[OPType, PTyp
             + np.arange(length) * s_size
         )
 
-    @classProp
-    def sharpness(self) -> int:
-        return self.pattern.sharpness
 
-    @property
-    def step(self) -> int:
-        raise NotImplementedError
-
-    @property
-    def acci(self) -> Real:
-        raise NotImplementedError
-
-    @property
-    def tone(self) -> Real:
-        return self.diatonic[self.step] + self.sharpness * self.acci
+class OPitch[PType: "Pitch"](_abc_edo.OPitch[PType], Notation[Self, PType]): ...
 
 
-class OPitch[PType: "Pitch"](_abc_base.OPitch[PType], Notation[Self, PType]): ...
-
-
-class Pitch[OPType: OPitch](_abc_base.Pitch[OPType], Notation[OPType, Self]): ...
+class Pitch[OPType: OPitch](_abc_edo.Pitch[OPType], Notation[OPType, Self]): ...

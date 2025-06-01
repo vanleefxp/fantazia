@@ -2,7 +2,7 @@ from functools import cache, lru_cache
 from numbers import Integral
 import math
 
-from .abc import edo as _abc_edo, wrapper as _abc_wrapper
+from .abc import edoCo5 as _abc_edoCo5, wrapper as _abc_wrapper
 from . import edo12 as _edo12
 from .edo12 import Notation as edo12
 from ..utils.cls import classProp
@@ -13,7 +13,9 @@ LOG_2_3_M1 = math.log2(1.5)
 
 
 @lru_cache
-def edo(n: Integral) -> type[_abc_edo.Notation]:
+def edo(n: Integral) -> type[_abc_edoCo5.Notation]:
+    if n <= 0:
+        raise ValueError("n must be a positive integer")
     n: int = int(n)
     fifthSize = round(n * LOG_2_3_M1)
     d = math.gcd(n, fifthSize)
@@ -28,10 +30,10 @@ def edo(n: Integral) -> type[_abc_edo.Notation]:
 
 
 @cache
-def _createEdo(n: int) -> type[_abc_edo.Notation]:
+def _createEdo(n: int) -> type[_abc_edoCo5.Notation]:
     class _Notation(
         _abc_wrapper.Notation["_OPitch", "_Pitch"],
-        _abc_edo.Notation["_OPitch", "_Pitch"],
+        _abc_edoCo5.Notation["_OPitch", "_Pitch"],
     ):
         @classProp
         def edo(cls) -> int:

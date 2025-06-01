@@ -1,17 +1,16 @@
 from __future__ import annotations
 
-from abc import abstractmethod
 from numbers import Real
 from functools import lru_cache
-from typing import Literal, Self
+from typing import Self
 from collections.abc import Sequence
 
 from bidict import bidict
 import numpy as np
 import pyrsistent as pyr
 
-from . import base as _abc_base
-from ...utils.cls import NewHelperMixin
+from . import quasiDiatonic as _abc_quasiDiatonic
+from ...utils.cls import NewHelperMixin, classProp
 from ...utils.number import RMode, rdivmod, resolveInt
 
 
@@ -181,19 +180,14 @@ def _acci2Str(acci: Real, *, symbolThresh: int = 3, maxDecimalDigits: int = 3) -
             return f"[{round(acci, maxDecimalDigits):+}]"
 
 
-class Notation[OPType: "OPitch", PType: "Pitch"](_abc_base.Notation[OPType, PType]):
+class Notation[OPType: "OPitch", PType: "Pitch"](
+    _abc_quasiDiatonic.Notation[OPType, PType]
+):
     __slots__ = ()
 
-    @property
-    @abstractmethod
-    def step(self) -> int:
-        raise NotImplementedError
-
-    @property
-    @abstractmethod
-    def acci(self) -> Real:
-        """An accidental value in semitones that modifies the pitch."""
-        raise NotImplementedError
+    @classProp
+    def n_steps(self) -> int:
+        return 7
 
     @property
     def qual(self) -> Real:
@@ -211,19 +205,9 @@ class Notation[OPType: "OPitch", PType: "Pitch"](_abc_base.Notation[OPType, PTyp
 
 
 class OPitch[PType: "Pitch"](
-    _abc_base.OPitch[PType], Notation[Self, PType], NewHelperMixin
+    _abc_quasiDiatonic.OPitch[PType], Notation[Self, PType], NewHelperMixin
 ):
     __slots__ = ()
-
-    @classmethod
-    def _newImpl(self, step: int, acci: Real) -> Self:
-        self._step = step
-        self._acci = acci
-        return self
-
-    @classmethod
-    def _fromStepAndAcci(self, step: int, acci: Real) -> Self:
-        return self._newHelper(step, acci)
 
     @classmethod
     def co5(cls, n: int = 0) -> Self:
@@ -243,24 +227,8 @@ class OPitch[PType: "Pitch"](
         return f"{STEP_NAMES[self.step]}{_acci2Str(self.acci)}"
 
 
-class Pitch[OPType: OPitch](_abc_base.Pitch[OPType], Notation[OPType, Self]):
+class Pitch[OPType: OPitch](_abc_quasiDiatonic.Pitch[OPType], Notation[OPType, Self]):
     __slots__ = ()
-
-    @property
-    @lru_cache
-    def sgn(self) -> Literal[-1, 0, 1]:
-        if self.step == 0:
-            return (self.acci > 0) - (self.acci < 0)
-        return (self.step > 0) - (self.step < 0)
-
-    @property
-    @lru_cache
-    def step(self) -> int:
-        return self.opitch.step + 7 * self.o
-
-    @property
-    def acci(self) -> Real:
-        return self.opitch.acci
 
     def interval(self, *, compound: bool = False, **kwargs):
         if self < self.ZERO:  # negative interval
