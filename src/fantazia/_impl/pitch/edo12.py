@@ -11,9 +11,7 @@ from fractions import Fraction as Q
 import re
 import warnings
 
-from .abc.base import PitchNotation
-from .abc.edo import EDOPitchBase, OEDOPitch, EDOPitch
-from .abc.diatonic import DiatonicPitchBase
+from .abc import base as _abc_base, edo as _abc_edo, diatonic as _abc_diatonic
 from .abc.diatonic import (
     MAJOR_SCALE_TONES,
     STEP_NAMES,
@@ -38,7 +36,7 @@ if t.TYPE_CHECKING:  # pragma: no cover
     import music21 as m21  # type: ignore
 
 __all__ = [
-    "edo12",
+    "Notation",
     "OPitch",
     "Pitch",
     "oP",
@@ -235,8 +233,8 @@ _resolveStep = step
 _resolveAcci = acci
 
 
-def _resolveTone(src: edo12 | Real) -> Real:
-    if isinstance(src, edo12):
+def _resolveTone(src: Notation | Real) -> Real:
+    if isinstance(src, Notation):
         return src.tone
     else:
         return resolveInt(src)
@@ -357,7 +355,7 @@ class AcciPrefs:
             return step
 
 
-class edo12(EDOPitchBase["OPitch", "Pitch"]):
+class Notation(_abc_edo.Notation["OPitch", "Pitch"]):
     """
     **12 EDO**, or 12 tone equal temperament, which is the standard tuning system.
     """
@@ -560,7 +558,7 @@ class edo12(EDOPitchBase["OPitch", "Pitch"]):
             step=m21_step,
             accidental=m21_acci,
             microtone=m21_microtone,
-            octave=self.o + 4 if isinstance(self, PitchNotation) else None,
+            octave=self.o + 4 if isinstance(self, _abc_base.Pitch) else None,
         )
 
     def _m21_interval(
@@ -571,7 +569,7 @@ class edo12(EDOPitchBase["OPitch", "Pitch"]):
     ) -> m21.interval.Interval:
         import music21 as m21
 
-        if isinstance(self, PitchNotation) and self.sgn < 0:
+        if isinstance(self, _abc_base.Pitch) and self.sgn < 0:
             p = -self
             neg = True
             if rmode == RMode.D or rmode == RMode.C:
@@ -621,7 +619,7 @@ class edo12(EDOPitchBase["OPitch", "Pitch"]):
         return self
 
 
-class OPitch(edo12, OEDOPitch["Pitch"]):
+class OPitch(Notation, _abc_edo.OPitch["Pitch"]):
     """
     Represents a general pitch, or equivalently, a simple interval, without octave
     specification.
@@ -696,7 +694,7 @@ class OPitch(edo12, OEDOPitch["Pitch"]):
             ...
 
         @overload
-        def __new__(cls, step: Integral | str, *, tone: Real | edo12) -> Self:
+        def __new__(cls, step: Integral | str, *, tone: Real | Notation) -> Self:
             """
             Creates a new `OPitch` object from a step and a chromatic tone.
 
@@ -710,7 +708,7 @@ class OPitch(edo12, OEDOPitch["Pitch"]):
         def __new__(
             cls,
             *,
-            tone: Real | edo12,
+            tone: Real | Notation,
             acciPref: AcciPref = AcciPrefs.CLOSEST_FLAT_F_SHARP,
         ) -> Self:
             """
@@ -744,15 +742,15 @@ class OPitch(edo12, OEDOPitch["Pitch"]):
             if isinstance(arg1, str):
                 # string notation
                 return cls._parse(arg1)
-            if isinstance(arg1, edo12):
+            if isinstance(arg1, Notation):
                 # another `PitchBase` object
                 return arg1.opitch
 
-            from .abc.wrapper import PitchWrapperBase  # avoid cyclic import
+            from .abc.wrapper import Notation  # avoid cyclic import
 
-            if isinstance(arg1, PitchWrapperBase):
+            if isinstance(arg1, Notation):
                 return arg1.opitch._p
-            if isinstance(arg1, DiatonicPitchBase):
+            if isinstance(arg1, _abc_base.DiatonicPitchBase):
                 return cls._newHelper(arg1.opitch.step, arg1.acci)
             if lazyIsInstance(arg1, "music21.pitch.Pitch"):
                 # `music21` pitch
@@ -883,7 +881,7 @@ class OPitch(edo12, OEDOPitch["Pitch"]):
         return self._newHelper(step, acci)
 
     def __add__(self, other: Any) -> Self:
-        if not isinstance(other, edo12):
+        if not isinstance(other, Notation):
             return NotImplemented
         step = self.step + other.step
         octave, step = divmod(step, 7)
@@ -925,7 +923,7 @@ class OPitch(edo12, OEDOPitch["Pitch"]):
         return (self._newImpl, (self.step, self.acci))
 
 
-class Pitch(edo12, EDOPitch[OPitch]):
+class Pitch(Notation, _abc_edo.Pitch[OPitch]):
     """
     Represents a pitch with specific octave, or an interval that may cross multiple octaves.
     """
@@ -947,7 +945,7 @@ class Pitch(edo12, EDOPitch[OPitch]):
         @overload
         def __new__(
             cls,
-            src: str | DiatonicPitchBase | m21.pitch.Pitch | m21.interval.Interval,
+            src: str | _abc_diatonic.Notation | m21.pitch.Pitch | m21.interval.Interval,
             /,
             *,
             o: Integral,
@@ -968,7 +966,7 @@ class Pitch(edo12, EDOPitch[OPitch]):
 
         @overload
         def __new__(
-            cls, step: Integral | str, /, *, tone: Real | edo12, o: Integral
+            cls, step: Integral | str, /, *, tone: Real | Notation, o: Integral
         ) -> Self:
             """
             Eauivalent to `Pitch(OPitch(step, tone=tone), o=o)`.
@@ -980,7 +978,7 @@ class Pitch(edo12, EDOPitch[OPitch]):
             cls,
             /,
             *,
-            tone: Real | edo12,
+            tone: Real | Notation,
             acciPref: AcciPref = AcciPrefs.CLOSEST_FLAT_F_SHARP,
             o: int,
         ) -> Self:
@@ -1029,7 +1027,7 @@ class Pitch(edo12, EDOPitch[OPitch]):
             ...
 
         @overload
-        def __new__(cls, step: int | str, /, *, tone: Real | edo12) -> Self:
+        def __new__(cls, step: int | str, /, *, tone: Real | Notation) -> Self:
             """
             Creates a `Pitch` object from a step and a chromatic tone. Both the step and tone
             are octave sensitive.
@@ -1044,7 +1042,7 @@ class Pitch(edo12, EDOPitch[OPitch]):
             cls,
             /,
             *,
-            tone: Real | edo12,
+            tone: Real | Notation,
             acciPref: AcciPref = AcciPrefs.CLOSEST_FLAT_F_SHARP,
         ) -> Self:
             """
@@ -1091,15 +1089,15 @@ class Pitch(edo12, EDOPitch[OPitch]):
             if isinstance(arg1, Pitch):
                 # another `Pitch` object
                 return arg1
-            if isinstance(arg1, edo12):
+            if isinstance(arg1, Notation):
                 # `OPitch` object
                 return cls._newHelper(arg1.opitch, 0)
 
-            from .abc.wrapper import PitchWrapperBase  # avoid cyclic import
+            from .abc.wrapper import Notation  # avoid cyclic import
 
-            if isinstance(arg1, PitchWrapperBase):
+            if isinstance(arg1, Notation):
                 return cls._newHelper(arg1.opitch._p, 0)
-            if isinstance(arg1, DiatonicPitchBase):
+            if isinstance(arg1, _abc_diatonic.Notation):
                 return cls._fromStepAndAcci(arg1.step, arg1.acci)
             if lazyIsInstance(arg1, "music21.pitch.Pitch"):
                 # `music21` pitch
@@ -1216,7 +1214,7 @@ class Pitch(edo12, EDOPitch[OPitch]):
         return self._newHelper(OPitch._newHelper(ostep, acci), octave)
 
     def __add__(self, other: Any) -> Self:
-        if not isinstance(other, edo12):
+        if not isinstance(other, Notation):
             return NotImplemented
         step = self.step + other.step
         tone = self.tone + other.tone

@@ -1,18 +1,19 @@
 from __future__ import annotations
 
 from typing import Any, Self
+import typing as t
 from collections.abc import Callable
 from numbers import Real
 
 
-from .diatonic import DiatonicPitchBase, ODiatonicPitch, DiatonicPitch
-from ..edo12 import OPitch
+from . import diatonic as _abc_diatonic
 from ...utils.cls import cachedClassProp, cachedGetter
 
+if t.TYPE_CHECKING:
+    from .. import edo12
 
-class PitchWrapperBase[OPType: "OPitchWrapper", PType: "PitchWrapper"](
-    DiatonicPitchBase[OPType, PType]
-):
+
+class Notation[OPType: "OPitch", PType: "Pitch"](_abc_diatonic.Notation[OPType, PType]):
     """Helper type for wrapping a `PitchBase` with a different type."""
 
     @property
@@ -38,30 +39,34 @@ class PitchWrapperBase[OPType: "OPitchWrapper", PType: "PitchWrapper"](
         return (self._newHelper, (self._p,))
 
 
-class OPitchWrapper[PType: "PitchWrapper"](
-    PitchWrapperBase[Self, PType], ODiatonicPitch[PType]
-):
-    _p: OPitch
+class OPitch[PType: "Pitch"](Notation[Self, PType], _abc_diatonic.OPitch[PType]):
+    _p: edo12.OPitch
 
     @classmethod
-    def _newImpl(cls, p: OPitch) -> Self:
+    def _newImpl(cls, p: edo12.OPitch) -> Self:
         self = super().__new__(cls)
         self._p = p
         return self
 
     @cachedClassProp(key="_zero")
     def ZERO(cls) -> Self:
-        return cls._newHelper(OPitch.ZERO)
+        from .. import edo12
+        # import when needed to avoid circular import
+
+        return cls._newHelper(edo12.OPitch.ZERO)
 
     @classmethod
-    def _newImpl(cls, p: OPitch) -> Self:
+    def _newImpl(cls, p: edo12.OPitch) -> Self:
         self = super().__new__(cls)
         self._p = p
         return self
 
     @classmethod
     def _fromStepAndAcci(cls, step: int, acci: Real) -> Self:
-        return cls._newHelper(OPitch._fromStepAndAcci(step, acci))
+        from .. import edo12
+        # import when needed to avoid circular import
+
+        return cls._newHelper(edo12.OPitch._fromStepAndAcci(step, acci))
 
     @property
     def step(self) -> int:
@@ -72,9 +77,7 @@ class OPitchWrapper[PType: "PitchWrapper"](
         return self._p.acci
 
 
-class PitchWrapper[OPType: OPitchWrapper](
-    PitchWrapperBase[OPType, Self], DiatonicPitch[OPType]
-):
+class Pitch[OPType: OPitch](Notation[OPType, Self], _abc_diatonic.Pitch[OPType]):
     @cachedClassProp(key="_zero")
     def ZERO(cls) -> Self:
         return cls._newHelper(cls.OPitch.ZERO)

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import typing as t
 from typing import Self, Any, overload
 from collections.abc import Mapping
@@ -8,19 +10,17 @@ from fractions import Fraction as Q
 import math
 import warnings
 
-from .abc.base import PitchNotationBase, PitchNotation
-from .abc.diatonic import DiatonicPitchBase
-from .abc.wrapper import PitchWrapperBase, OPitchWrapper, PitchWrapper
-from .edo12 import OPitch, _resolveStep, _resolveAcci
-
-from ..math_ import Monzo
+from .abc import base as _abc_base, diatonic as _abc_diatonic, wrapper as _abc_wrapper
+from . import edo12 as _edo12
+from .edo12 import _resolveStep, _resolveAcci
+from ..math_.ntheory import Monzo
 from ..utils.cls import cachedProp, cachedGetter, classProp
 from ..utils.number import alternateSignInts, primeFactors, pf2Rational
 
 if t.TYPE_CHECKING:
     import music21 as m21
 
-__all__ = ["JIPitch", "OJIPitch", "JustIntonation", "ji"]
+__all__ = ["Pitch", "OPitch", "Notation"]
 
 _FJS_TOL = Q(65, 63)
 _LOG_2_3 = math.log2(3)
@@ -117,8 +117,8 @@ def _commaPf(adjust: Q, target: Counter[int] = None) -> Counter[int]:
     return target
 
 
-def _resolveFreq(freq: Real | str | PitchNotationBase, limit=_MISSING) -> Monzo:
-    if isinstance(freq, PitchNotationBase):
+def _resolveFreq(freq: Real | str | _abc_base.Notation, limit=_MISSING) -> Monzo:
+    if isinstance(freq, _abc_base.Notation):
         freq = freq.freq
     if isinstance(freq, Monzo):
         return freq
@@ -154,14 +154,14 @@ def _resolveAdjust(adjust: Rational | str | Mapping[int, int] = 1) -> Q:
     return adjust
 
 
-class JustIntonation(PitchWrapperBase["OJIPitch", "JIPitch"]):
+class Notation(_abc_wrapper.Notation["OPitch", "Pitch"]):
     @classProp
-    def OPitch(self) -> type["OJIPitch"]:
-        return OJIPitch
+    def OPitch(self) -> type["OPitch"]:
+        return OPitch
 
     @classProp
-    def Pitch(self) -> type["JIPitch"]:
-        return JIPitch
+    def Pitch(self) -> type["Pitch"]:
+        return Pitch
 
     @classmethod
     @lru_cache
@@ -182,14 +182,14 @@ class JustIntonation(PitchWrapperBase["OJIPitch", "JIPitch"]):
             pf[3] += dp3
             p2 -= dp2
             p3 -= dp3
-        res = cls.OPitch._newHelper(OPitch.co5(p3), adjust)
+        res = cls.OPitch._newHelper(_edo12.OPitch.co5(p3), adjust)
         res._comma = Monzo._fromMapping(pf)
         q, r = divmod(p3, 7)
         neg_p2_expected = (r * 3 // 2) + q * 11
         pf[3] += p3
         pf[2] -= neg_p2_expected
         res._freq = Monzo._fromMapping(pf)
-        if issubclass(cls, PitchNotation):
+        if issubclass(cls, _abc_base.Pitch):
             o = p2 + neg_p2_expected
             res = cls._newHelper(res, o)
         return res
@@ -224,7 +224,7 @@ class JustIntonation(PitchWrapperBase["OJIPitch", "JIPitch"]):
         return self._p == other._p and self.adjust == other.adjust
 
 
-class OJIPitch(JustIntonation, OPitchWrapper["JIPitch"]):
+class OPitch(Notation, _abc_wrapper.OPitch["Pitch"]):
     __slots__ = ("_p", "_adjust", "_freq", "_comma", "_hash")
     _adjust: Q
     acci: int
@@ -235,7 +235,7 @@ class OJIPitch(JustIntonation, OPitchWrapper["JIPitch"]):
         def __new__(
             cls,
             *,
-            freq: Real | str | PitchNotationBase,
+            freq: Real | str | _abc_base.Notation,
             limit: Integral | None = None,
         ) -> Self:
             """
@@ -259,7 +259,10 @@ class OJIPitch(JustIntonation, OPitchWrapper["JIPitch"]):
         @overload
         def __new__(
             cls,
-            src: str | DiatonicPitchBase | m21.pitch.Pitch | m21.interval.Interval,
+            src: str
+            | _abc_base.DiatonicPitchBase
+            | m21.pitch.Pitch
+            | m21.interval.Interval,
             /,
             *,
             adjust: Rational | str | Mapping[int, int] = 1,
@@ -308,7 +311,7 @@ class OJIPitch(JustIntonation, OPitchWrapper["JIPitch"]):
                     return arg1
                 adjust = Q(1)
 
-        p = OPitch(arg1, arg2)
+        p = _edo12.OPitch(arg1, arg2)
         if not p.acci.is_integer():
             # a JI pitch must have an integer accidental
             # TODO)) probably convert non-integer accidentals to integer accidentals?
@@ -317,7 +320,7 @@ class OJIPitch(JustIntonation, OPitchWrapper["JIPitch"]):
         return cls._newImpl(p, adjust)
 
     @classmethod
-    def _newImpl(cls, p: OPitch, adjust: Rational) -> Self:
+    def _newImpl(cls, p: _edo12.OPitch, adjust: Rational) -> Self:
         self = super()._newImpl(p)
         self._adjust = adjust
         return self
@@ -326,12 +329,12 @@ class OJIPitch(JustIntonation, OPitchWrapper["JIPitch"]):
     def _parse(cls, src: str) -> Self:
         adjustStart = src.find("(")
         if adjustStart < 0:
-            p = OPitch._parse(src)
+            p = _edo12.OPitch._parse(src)
             if not p.acci.is_integer():
                 raise ValueError("Just intonation only supports integer accidentals.")
             adjust = Q(1)
         else:
-            p = OPitch._parse(src[:adjustStart])
+            p = _edo12.OPitch._parse(src[:adjustStart])
             if not p.acci.is_integer():
                 raise ValueError("Just intonation only supports integer accidentals.")
             if src[-1] != ")":
@@ -367,7 +370,7 @@ class OJIPitch(JustIntonation, OPitchWrapper["JIPitch"]):
         return hash((self.__class__, self._p, self._adjust))
 
 
-class JIPitch(JustIntonation, PitchWrapper[OJIPitch]):
+class Pitch(Notation, _abc_wrapper.Pitch[OPitch]):
     __slots__ = ("_opitch", "_o", "_freq", "_hash")
 
     if t.TYPE_CHECKING:  # pragma: no cover
@@ -378,18 +381,18 @@ class JIPitch(JustIntonation, PitchWrapper[OJIPitch]):
             cls,
             /,
             *,
-            freq: Real | str | PitchNotationBase,
+            freq: Real | str | _abc_base.Notation,
             limit: Integral | None = None,
             o: Integral,
         ) -> Self: ...
 
         @overload
-        def __new__(cls, src: str | OJIPitch, /, *, o: Integral) -> Self: ...
+        def __new__(cls, src: str | OPitch, /, *, o: Integral) -> Self: ...
 
         @overload
         def __new__(
             cls,
-            src: str | DiatonicPitchBase | m21.pitch.Pitch | m21.interval.Interval,
+            src: str | _abc_diatonic.Notation | m21.pitch.Pitch | m21.interval.Interval,
             /,
             *,
             adjust: Rational | str | Mapping[int, int] = 1,
@@ -414,7 +417,7 @@ class JIPitch(JustIntonation, PitchWrapper[OJIPitch]):
             cls,
             /,
             *,
-            freq: Real | str | PitchNotationBase,
+            freq: Real | str | _abc_base.Notation,
             limit: Integral | None = None,
         ) -> Self: ...
 
@@ -424,7 +427,7 @@ class JIPitch(JustIntonation, PitchWrapper[OJIPitch]):
         @overload
         def __new__(
             cls,
-            src: str | DiatonicPitchBase | m21.pitch.Pitch | m21.interval.Interval,
+            src: str | _abc_diatonic.Notation | m21.pitch.Pitch | m21.interval.Interval,
             /,
             *,
             adjust: Rational | str | Mapping[int, int] = 1,
@@ -442,7 +445,7 @@ class JIPitch(JustIntonation, PitchWrapper[OJIPitch]):
         limit=_MISSING,
     ):
         if o is not _MISSING:
-            opitch = OJIPitch(arg1, arg2, freq=freq, limit=limit, adjust=adjust)
+            opitch = OPitch(arg1, arg2, freq=freq, limit=limit, adjust=adjust)
             o = int(o)
             return cls._newHelper(opitch, o)
 
@@ -470,17 +473,17 @@ class JIPitch(JustIntonation, PitchWrapper[OJIPitch]):
         o, ostep = divmod(step, 7)
         acci = _resolveAcci(arg2)
         adjust = _resolveAdjust(adjust)
-        opitch = OJIPitch._newHelper(OPitch._newHelper(ostep, acci), adjust)
+        opitch = OPitch._newHelper(_edo12.OPitch._newHelper(ostep, acci), adjust)
         return cls._newHelper(opitch, o)
 
     @classmethod
     def _parse(cls, src: str) -> Self:
         if not src[-1].isdigit():
-            opitch = OJIPitch._parse(src)
+            opitch = OPitch._parse(src)
             o = 0
         else:
             opitch, o = src.rsplit("_", 1)
-            opitch = OJIPitch._parse(opitch)
+            opitch = OPitch._parse(opitch)
             o = int(o)
         return cls._newHelper(opitch, o)
 
@@ -490,6 +493,3 @@ class JIPitch(JustIntonation, PitchWrapper[OJIPitch]):
     @cachedGetter
     def __hash__(self):
         return hash((self.__class__, self.opitch, self.o))
-
-
-ji = JustIntonation

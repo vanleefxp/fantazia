@@ -10,7 +10,7 @@ from bidict import bidict
 import numpy as np
 import pyrsistent as pyr
 
-from .base import PitchNotationBase, OPitchNotation, PitchNotation
+from . import base as _abc_base
 from ...utils.cls import NewHelperMixin
 from ...utils.number import RMode, rdivmod, resolveInt
 
@@ -181,9 +181,7 @@ def _acci2Str(acci: Real, *, symbolThresh: int = 3, maxDecimalDigits: int = 3) -
             return f"[{round(acci, maxDecimalDigits):+}]"
 
 
-class DiatonicPitchBase[OPType: "ODiatonicPitch", PType: "DiatonicPitch"](
-    PitchNotationBase[OPType, PType]
-):
+class Notation[OPType: "OPitch", PType: "Pitch"](_abc_base.Notation[OPType, PType]):
     __slots__ = ()
 
     @property
@@ -212,8 +210,8 @@ class DiatonicPitchBase[OPType: "ODiatonicPitch", PType: "DiatonicPitch"](
         return f'{self.__class__.__name__}("{self!s}")'
 
 
-class ODiatonicPitch[PType: "DiatonicPitch"](
-    OPitchNotation[PType], DiatonicPitchBase[Self, PType], NewHelperMixin
+class OPitch[PType: "Pitch"](
+    _abc_base.OPitch[PType], Notation[Self, PType], NewHelperMixin
 ):
     __slots__ = ()
 
@@ -245,9 +243,7 @@ class ODiatonicPitch[PType: "DiatonicPitch"](
         return f"{STEP_NAMES[self.step]}{_acci2Str(self.acci)}"
 
 
-class DiatonicPitch[OPType: ODiatonicPitch](
-    PitchNotation[OPType], DiatonicPitchBase[OPType, Self]
-):
+class Pitch[OPType: OPitch](_abc_base.Pitch[OPType], Notation[OPType, Self]):
     __slots__ = ()
 
     @property

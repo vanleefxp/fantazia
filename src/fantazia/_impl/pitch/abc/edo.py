@@ -10,15 +10,24 @@ import math
 import numpy as np
 import pyrsistent as pyr
 
-from .diatonic import DiatonicPitch, ODiatonicPitch, DiatonicPitchBase
+from . import diatonic as _abc_diatonic
 from ...utils.cls import classProp, cachedClassProp
 from ...utils.number import qdiv
-from ...math_ import Monzo
+from ...math_.ntheory import Monzo
+
+_DIATONIC_REORDER = np.arange(1, 14, 2) % 7
+_DIATONIC_REORDER.flags.writeable = False
+
+__all__ = ["Notation", "OPitch", "Pitch"]
 
 
-class EDOPitchBase[OPType: "OEDOPitch", PType: "EDOPitch"](
-    DiatonicPitchBase[OPType, PType]
-):
+class Notation[OPType: "OPitch", PType: "Pitch"](_abc_diatonic.Notation[OPType, PType]):
+    """
+    [**Chain-of-fifth notation**](https://en.xen.wiki/w/Chain-of-fifths_notation) for EDO
+    tuning systems. This tuning system choses the best EDO approximation of a perfect
+    fifth (P5) interval and generate diatonic pitches in chain-of-fifths order.
+    """
+
     __slots__ = ()
 
     @classProp
@@ -51,7 +60,7 @@ class EDOPitchBase[OPType: "OEDOPitch", PType: "EDOPitch"](
         A sequence denoting mapping from diatonic steps to EDO steps.
         """
         res = np.arange(-1, 6) * cls.fifthSize - cls.edo * (np.arange(-1, 6) // 2)
-        res = res[np.arange(1, 14, 2) % 7]
+        res = res[_DIATONIC_REORDER]
         res.flags.writeable = False
         return res
 
@@ -83,7 +92,7 @@ class EDOPitchBase[OPType: "OEDOPitch", PType: "EDOPitch"](
         return self.tone == other.tone
 
 
-class OEDOPitch[PType: "EDOPitch"](ODiatonicPitch[PType], EDOPitchBase[Self, PType]):
+class OPitch[PType: "Pitch"](_abc_diatonic.OPitch[PType], Notation[Self, PType]):
     __match_args__ = ("step", "acci", "tone")
     __slots__ = ()
 
@@ -104,7 +113,7 @@ class OEDOPitch[PType: "EDOPitch"](ODiatonicPitch[PType], EDOPitchBase[Self, PTy
         return self.diatonic[self.step] + self.acci * self.sharpness
 
 
-class EDOPitch[OPType: OEDOPitch](DiatonicPitch[OPType], EDOPitchBase[OPType, Self]):
+class Pitch[OPType: OPitch](_abc_diatonic.Pitch[OPType], Notation[OPType, Self]):
     __match_args__ = ("opitch", "o", "step", "acci", "tone")
     __slots__ = ()
 

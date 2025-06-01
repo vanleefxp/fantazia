@@ -5,13 +5,13 @@ from numbers import Real
 from typing import Literal, Self
 import math
 
-from ...math_ import AbelianElement
+from ...math_.group import AbelianElement
 from ...utils.cls import NewHelperMixin, ClassPropMeta, classProp
 
 
-class PitchNotationBase[
-    OPType: "OPitchNotation"[PType],
-    PType: "PitchNotation"[OPType],
+class Notation[
+    OPType: "OPitch"[PType],
+    PType: "Pitch"[OPType],
 ](AbelianElement, metaclass=ClassPropMeta):
     __slots__ = ()
 
@@ -96,7 +96,7 @@ class PitchNotationBase[
         return self.opitch.atOctave(octave)
 
 
-class OPitchNotation[PType: "PitchNotation"](PitchNotationBase[Self, PType]):
+class OPitch[PType: "Pitch"](Notation[Self, PType]):
     __slots__ = ()
 
     @property
@@ -111,9 +111,7 @@ class OPitchNotation[PType: "PitchNotation"](PitchNotationBase[Self, PType]):
         return self.pos % 1 == other.pos % 1
 
 
-class PitchNotation[OPType: OPitchNotation](
-    PitchNotationBase[OPType, Self], NewHelperMixin
-):
+class Pitch[OPType: OPitch](Notation[OPType, Self], NewHelperMixin):
     __slots__ = ()
 
     @classmethod
@@ -128,7 +126,7 @@ class PitchNotation[OPType: OPitchNotation](
         return cls._newHelper(opitch, o)
 
     @property
-    def opitch(self) -> OPitchNotation:
+    def opitch(self) -> OPitch:
         return self._opitch
 
     @property
